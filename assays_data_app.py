@@ -79,7 +79,7 @@ with st.sidebar:
 
     # Model selection
     model = st.selectbox(
-        "Select AI Model",
+        "Select [AI Model](https://openrouter.ai/models)",
         list(model_mapping.keys()),
         index=0,
         help="Choose the AI model to use for answering questions"
@@ -145,17 +145,25 @@ Dataset Information:
 - Columns: {len(df.columns)}
 - Column names: {', '.join(df.columns.tolist())}
 
-Sample of the data (first 5 rows):
-{df.head().to_string()}
+All data:
+{df.to_string()}
 
 Data types:
 {df.dtypes.to_string()}
 """
+# Sample of the data (first 5 rows):
+# {df.head().to_string()}
+
+                            system_prompt = (
+                                "You are a helpful data analyst assistant. You have access to a dataset with "
+                                f"the following information:\n\n{data_summary}\n\nAnswer questions about this data "
+                                "accurately and provide insights when relevant."
+                            )
 
                             # Make API call to OpenRouter
                             headers = {
                                 "Authorization": f"Bearer {openrouter_api_key}",
-                                "Content-Type": "application/json"
+                                "Content-Type": "application/json",
                             }
 
                             data = {
@@ -163,11 +171,11 @@ Data types:
                                 "messages": [
                                     {
                                         "role": "system",
-                                        "content": f"You are a helpful data analyst assistant. You have access to a dataset with the following information:\n\n{data_summary}\n\nAnswer questions about this data accurately and provide insights when relevant. If you need to reference specific data points, use the sample data provided."
+                                        "content": system_prompt,
                                     },
                                     {
                                         "role": "user",
-                                        "content": prompt
+                                        "content": prompt,
                                     }
                                 ]
                             }
@@ -176,7 +184,7 @@ Data types:
                                 "https://openrouter.ai/api/v1/chat/completions",
                                 headers=headers,
                                 json=data,
-                                timeout=30
+                                timeout=30,
                             )
 
                             if response.status_code == 200:
