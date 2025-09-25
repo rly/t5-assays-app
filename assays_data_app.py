@@ -26,6 +26,11 @@ st.markdown("""
         visibility: visible;
     }
 
+    /* Set the padding of the main content area */
+    div[data-testid="stMainBlockContainer"] {
+        padding: 2rem 1rem;
+    }
+
     /* Style the divider column */
     [data-testid="column"]:nth-child(2) {
         display: flex !important;
@@ -38,7 +43,8 @@ st.markdown("""
     .column-divider {
         width: 3px !important;
         background: #C7C7C7 !important;
-        height: 1000px !important;
+        height: 100% !important;
+        min-height: 100vh !important;
         border-radius: 2px !important;
     }
 
