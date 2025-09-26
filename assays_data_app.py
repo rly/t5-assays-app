@@ -1,9 +1,64 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import requests
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
+import json
 
 # Set the page configuration to use a wide layout
 st.set_page_config(layout="wide", page_title="T5 Assays Data Assistant", page_icon="🧬")
+
+# Google Drive folder ID from the URL
+DRIVE_FOLDER_ID = "1NSXTkDCgiWZz4ejUOJkEXGk3qChkK6Hm"
+
+def get_google_sheets_from_folder():
+    """Get list of Google Sheets from the specified Drive folder"""
+    try:
+        # Create credentials from secrets
+        credentials_info = {
+            "type": st.secrets["connections"]["gsheets"]["type"],
+            "project_id": st.secrets["connections"]["gsheets"]["project_id"],
+            "private_key_id": st.secrets["connections"]["gsheets"]["private_key_id"],
+            "private_key": st.secrets["connections"]["gsheets"]["private_key"],
+            "client_email": st.secrets["connections"]["gsheets"]["client_email"],
+            "client_id": st.secrets["connections"]["gsheets"]["client_id"],
+            "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
+            "token_uri": st.secrets["connections"]["gsheets"]["token_uri"],
+            "auth_provider_x509_cert_url": st.secrets["connections"]["gsheets"]["auth_provider_x509_cert_url"],
+            "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"],
+        }
+
+        credentials = Credentials.from_service_account_info(
+            credentials_info,
+            scopes=['https://www.googleapis.com/auth/drive.readonly']
+        )
+
+        service = build('drive', 'v3', credentials=credentials)
+
+        # Query for Google Sheets in the specified folder
+        query = f"'{DRIVE_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+
+        results = service.files().list(
+            q=query,
+            pageSize=100,
+            fields="nextPageToken, files(id, name, webViewLink)"
+        ).execute()
+
+        items = results.get('files', [])
+
+        sheets = {}
+        for item in items:
+            sheets[item['name']] = {
+                'id': item['id'],
+                'url': f"https://docs.google.com/spreadsheets/d/{item['id']}/edit",
+                'webViewLink': item.get('webViewLink', '')
+            }
+
+        return sheets
+
+    except Exception as e:
+        st.error(f"Error accessing Google Drive: {str(e)}")
+        return {}
 
 model_mapping = {
     "Deepseek Chat V3.1 (free)": "deepseek/deepseek-chat-v3.1:free",
@@ -63,6 +118,33 @@ st.title("🧬 T5 Assays Data Assistant")
 with st.sidebar:
     st.header("Configuration")
 
+    # Sheet selection
+    st.subheader("📊 Select Google Sheet")
+
+    with st.spinner("Loading available sheets..."):
+        available_sheets = get_google_sheets_from_folder()
+
+    if available_sheets:
+        selected_sheet_name = st.selectbox(
+            "Choose a sheet:",
+            options=list(available_sheets.keys()),
+            help="Select which Google Sheet to analyze"
+        )
+
+        if selected_sheet_name:
+            selected_sheet_info = available_sheets[selected_sheet_name]
+            st.success(f"✅ Selected: {selected_sheet_name}")
+
+            # Store selected sheet info in session state
+            st.session_state.selected_sheet_url = selected_sheet_info['url']
+            st.session_state.selected_sheet_id = selected_sheet_info['id']
+    else:
+        st.error("❌ No Google Sheets found in the specified folder")
+        st.session_state.selected_sheet_url = None
+        st.session_state.selected_sheet_id = None
+
+    st.markdown("---")
+
     # OpenRouter API key input
     openrouter_api_key = st.text_input(
         "OpenRouter API Key",
@@ -87,9 +169,14 @@ with st.sidebar:
 
 # Create a connection object to the Google Sheet
 try:
+    # Check if a sheet is selected
+    if not hasattr(st.session_state, 'selected_sheet_url') or not st.session_state.selected_sheet_url:
+        st.warning("Please select a Google Sheet from the sidebar first.")
+        st.stop()
+
+    # Create connection and read data from the selected Google Sheet
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Read the data from the Google Sheet into a DataFrame with no caching
-    df = conn.read(ttl=0)
+    df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
 
     # Main layout with columns
     col1, divider, col2 = st.columns([5, 0.2, 5])
@@ -104,9 +191,8 @@ try:
         st.write(f"**Columns:** {len(df.columns)}")
         st.write(f"**Column Names:** {', '.join(df.columns.tolist())}")
 
-        # Add link to Google Sheet with image
-        sheet_url = st.secrets["connections"]["gsheets"]["spreadsheet"]
-
+        # Add link to Google Sheet
+        sheet_url = st.session_state.selected_sheet_url
         st.markdown(f"**[Open Google Sheet]({sheet_url})**")
 
 
