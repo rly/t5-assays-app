@@ -306,10 +306,20 @@ Data types:
                             st.error(error_msg)
                             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-            # Clear chat button
-            if st.button("Clear Chat History"):
-                st.session_state.messages = []
-                st.rerun()
+            # Quick action buttons
+            col_btn1, col_btn2 = st.columns([1, 1])
+
+            with col_btn1:
+                if st.button("🔬 Summarize SPR Assay Results", use_container_width=True):
+                    spr_prompt = "These are the results of an SPR assay of the PEITHO library on ChikV MacroDomain. Summarize these results."
+                    # Add the hardcoded prompt to chat and trigger response
+                    st.session_state.messages.append({"role": "user", "content": spr_prompt})
+                    st.rerun()
+
+            with col_btn2:
+                if st.button("🗑️ Clear Chat History", use_container_width=True):
+                    st.session_state.messages = []
+                    st.rerun()
 
         else:
             if not openrouter_api_key:
