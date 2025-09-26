@@ -146,14 +146,23 @@ with st.sidebar:
     st.markdown("---")
 
     # OpenRouter API key input
+    default_api_key = st.secrets.get("openrouter", {}).get("api_key", "")
+
     openrouter_api_key = st.text_input(
         "OpenRouter API Key",
         type="password",
-        help="Enter your OpenRouter API key to enable AI chat functionality"
+        value=default_api_key,
+        help="Enter your OpenRouter API key to enable AI chat functionality. A default key is provided for free models only."
     )
 
+    # Check if using default key
+    using_default_key = openrouter_api_key == default_api_key and default_api_key
+
     if openrouter_api_key:
-        st.success("✅ API Key provided")
+        if using_default_key:
+            st.info("🔓 Using default API key (free models only)")
+        else:
+            st.success("✅ Custom API Key provided")
     else:
         st.warning("⚠️ Please provide an OpenRouter API key to use the chat feature")
 
@@ -166,6 +175,13 @@ with st.sidebar:
         index=0,
         help="Choose the AI model to use for answering questions"
     )
+
+    # Validate model selection with default key
+    if using_default_key and model != "Deepseek Chat V3.1 (free)":
+        st.error("❌ Non-free models require your own API key. Please enter your own OpenRouter API key to use paid models.")
+        model_allowed = False
+    else:
+        model_allowed = True
 
 # Create a connection object to the Google Sheet
 try:
@@ -203,7 +219,7 @@ try:
         st.header("AI Chat")
 
         # Chat interface
-        if openrouter_api_key:
+        if openrouter_api_key and model_allowed:
             # Initialize chat history in session state
             if "messages" not in st.session_state:
                 st.session_state.messages = []
@@ -296,7 +312,10 @@ Data types:
                 st.rerun()
 
         else:
-            st.info("👆 Please provide an OpenRouter API key in the sidebar to start asking questions about your data.")
+            if not openrouter_api_key:
+                st.info("👆 Please provide an OpenRouter API key in the sidebar to start asking questions about your data.")
+            elif not model_allowed:
+                st.info("⚠️ Please select a free model or provide your own API key to use paid models.")
 
             example_questions = """
 #### Examples:
