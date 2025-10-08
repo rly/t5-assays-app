@@ -3,13 +3,9 @@ from streamlit_gsheets import GSheetsConnection
 import requests
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-import json
 
 # Set the page configuration to use a wide layout
 st.set_page_config(layout="wide", page_title="T5 Assays Data Assistant", page_icon="🧬")
-
-# Google Drive folder ID from the URL
-DRIVE_FOLDER_ID = "1NSXTkDCgiWZz4ejUOJkEXGk3qChkK6Hm"
 
 def get_google_sheets_from_folder():
     """Get list of Google Sheets from the specified Drive folder"""
@@ -36,7 +32,7 @@ def get_google_sheets_from_folder():
         service = build('drive', 'v3', credentials=credentials)
 
         # Query for Google Sheets in the specified folder
-        query = f"'{DRIVE_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+        query = f"'{st.secrets["connections"]["gsheets"]["folder_id"]}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
 
         results = service.files().list(
             q=query,
