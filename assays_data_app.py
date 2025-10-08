@@ -215,6 +215,66 @@ try:
     with divider:
         st.markdown('<div class="column-divider"></div>', unsafe_allow_html=True)
 
+    def generate_ai_response(prompt, df, openrouter_api_key, model):
+        """Generate AI response for a given prompt"""
+        # Prepare data context
+        data_summary = f"""
+Dataset Information:
+- Rows: {len(df)}
+- Columns: {len(df.columns)}
+- Column names: {', '.join(df.columns.tolist())}
+
+All data:
+{df.to_string()}
+
+Data types:
+{df.dtypes.to_string()}
+"""
+
+        system_prompt = (
+            "You are a helpful data analyst assistant. You have access to a dataset with "
+            f"the following information:\n\n{data_summary}\n\nAnswer questions about this data "
+            "accurately and provide insights when relevant."
+        )
+
+        # Make API call to OpenRouter
+        headers = {
+            "Authorization": f"Bearer {openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        data = {
+            "model": model_mapping[model],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ]
+        }
+
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=30,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            assistant_response = result["choices"][0]["message"]["content"]
+            st.markdown(assistant_response)
+            st.caption(f"_Model: {model}_")
+            st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+        else:
+            error_msg = f"Error: {response.status_code} - {response.text}"
+            st.error(error_msg)
+            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
     with col2:
         st.header("AI Chat")
 
@@ -229,6 +289,24 @@ try:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
+            # Check if the last message is from user and needs a response
+            needs_response = (
+                len(st.session_state.messages) > 0 and
+                st.session_state.messages[-1]["role"] == "user"
+            )
+
+            # If there's a pending user message, process it
+            if needs_response:
+                prompt = st.session_state.messages[-1]["content"]
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        try:
+                            generate_ai_response(prompt, df, openrouter_api_key, model)
+                        except Exception as e:
+                            error_msg = f"An error occurred: {str(e)}"
+                            st.error(error_msg)
+                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
             # Chat input
             if prompt := st.chat_input("Ask a question about the data..."):
                 # Add user message to chat history
@@ -240,67 +318,7 @@ try:
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
                         try:
-                            # Prepare data context
-                            data_summary = f"""
-Dataset Information:
-- Rows: {len(df)}
-- Columns: {len(df.columns)}
-- Column names: {', '.join(df.columns.tolist())}
-
-All data:
-{df.to_string()}
-
-Data types:
-{df.dtypes.to_string()}
-"""
-# Sample of the data (first 5 rows):
-# {df.head().to_string()}
-
-                            system_prompt = (
-                                "You are a helpful data analyst assistant. You have access to a dataset with "
-                                f"the following information:\n\n{data_summary}\n\nAnswer questions about this data "
-                                "accurately and provide insights when relevant."
-                            )
-
-                            # Make API call to OpenRouter
-                            headers = {
-                                "Authorization": f"Bearer {openrouter_api_key}",
-                                "Content-Type": "application/json",
-                            }
-
-                            data = {
-                                "model": model_mapping[model],
-                                "messages": [
-                                    {
-                                        "role": "system",
-                                        "content": system_prompt,
-                                    },
-                                    {
-                                        "role": "user",
-                                        "content": prompt,
-                                    }
-                                ]
-                            }
-
-                            response = requests.post(
-                                "https://openrouter.ai/api/v1/chat/completions",
-                                headers=headers,
-                                json=data,
-                                timeout=30,
-                            )
-
-                            if response.status_code == 200:
-                                result = response.json()
-                                assistant_response = result["choices"][0]["message"]["content"]
-                                st.markdown(assistant_response)
-
-                                # Add assistant response to chat history
-                                st.session_state.messages.append({"role": "assistant", "content": assistant_response})
-                            else:
-                                error_msg = f"Error: {response.status_code} - {response.text}"
-                                st.error(error_msg)
-                                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
+                            generate_ai_response(prompt, df, openrouter_api_key, model)
                         except Exception as e:
                             error_msg = f"An error occurred: {str(e)}"
                             st.error(error_msg)
