@@ -61,7 +61,7 @@ def get_google_sheets_from_folder():
         return {}
 
 model_mapping = {
-    "Deepseek Chat V3.1 (free)": "deepseek/deepseek-chat-v3.1:free",
+    "OpenAI GPT-OSS 20B (free)": "openai/gpt-oss-20b:free",
     "Gemini 2.5 Flash ($)": "google/gemini-2.5-flash",
     "GPT-5 Mini ($)": "openai/gpt-5-mini",
     "GPT-5 ($$)": "openai/gpt-5",
@@ -177,7 +177,7 @@ with st.sidebar:
     )
 
     # Validate model selection with default key
-    if using_default_key and model != "Deepseek Chat V3.1 (free)":
+    if using_default_key and model not in ("OpenAI GPT-OSS 20B (free)",):
         st.error("❌ Non-free models require your own API key. Please enter your own OpenRouter API key to use paid models.")
         model_allowed = False
     else:
