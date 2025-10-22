@@ -3,6 +3,7 @@ from streamlit_gsheets import GSheetsConnection
 import requests
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+import pandas as pd
 
 # Set the page configuration to use a wide layout
 st.set_page_config(layout="wide", page_title="T5 Assays Data Assistant", page_icon="🧬")
@@ -50,6 +51,9 @@ def get_google_sheets_from_folder():
                 'webViewLink': item.get('webViewLink', '')
             }
 
+        # Sort sheets by name
+        sheets = dict(sorted(sheets.items()))
+
         return sheets
 
     except Exception as e:
@@ -69,7 +73,7 @@ st.markdown("""
 <style>
     /* Set the width of the sidebar */
     section[data-testid="stSidebar"] {
-        width: 275px !important;
+        width: 550px !important;
     }
 
     /* Always show the collapse button */
@@ -114,28 +118,44 @@ st.title("🧬 T5 Assays Data Assistant")
 with st.sidebar:
     st.header("Configuration")
 
-    # Sheet selection
-    st.subheader("📊 Select Google Sheet")
+    # Data source selection
+    st.subheader("📊 Select Data Source")
 
-    with st.spinner("Loading available sheets..."):
-        available_sheets = get_google_sheets_from_folder()
+    # Radio button for data source type
+    data_source_type = st.radio(
+        "Choose data source:",
+        options=["VEEV MacroD PARG Merge", "Google Sheet"],
+        help="Select merged VEEV MacroD PARG dataset or a single Google Sheet"
+    )
 
-    if available_sheets:
-        selected_sheet_name = st.selectbox(
-            "Choose a sheet:",
-            options=list(available_sheets.keys()),
-            help="Select which Google Sheet to analyze"
-        )
+    if data_source_type == "Google Sheet":
+        with st.spinner("Loading available sheets..."):
+            available_sheets = get_google_sheets_from_folder()
 
-        if selected_sheet_name:
-            selected_sheet_info = available_sheets[selected_sheet_name]
-            st.success(f"✅ Selected: {selected_sheet_name}")
+        if available_sheets:
+            selected_sheet_name = st.selectbox(
+                "Choose a sheet:",
+                options=list(available_sheets.keys()),
+                help="Select which Google Sheet to analyze"
+            )
 
-            # Store selected sheet info in session state
-            st.session_state.selected_sheet_url = selected_sheet_info['url']
-            st.session_state.selected_sheet_id = selected_sheet_info['id']
+            if selected_sheet_name:
+                selected_sheet_info = available_sheets[selected_sheet_name]
+                st.success(f"✅ Selected: {selected_sheet_name}")
+
+                # Store selected sheet info in session state
+                st.session_state.selected_sheet_url = selected_sheet_info['url']
+                st.session_state.selected_sheet_id = selected_sheet_info['id']
+                st.session_state.data_source_type = "single_sheet"
+        else:
+            st.error("❌ No Google Sheets found in the specified folder")
+            st.session_state.selected_sheet_url = None
+            st.session_state.selected_sheet_id = None
+            st.session_state.data_source_type = None
     else:
-        st.error("❌ No Google Sheets found in the specified folder")
+        # VEEV MacroD PARG Merge option
+        st.success("✅ Selected: VEEV MacroD PARG Merge")
+        st.session_state.data_source_type = "veev_merge"
         st.session_state.selected_sheet_url = None
         st.session_state.selected_sheet_id = None
 
@@ -181,20 +201,77 @@ with st.sidebar:
 
 # Create a connection object to the Google Sheet
 try:
-    # Check if a sheet is selected
-    if not hasattr(st.session_state, 'selected_sheet_url') or not st.session_state.selected_sheet_url:
-        st.warning("Please select a Google Sheet from the sidebar first.")
+    # Check if a data source is selected
+    if not hasattr(st.session_state, 'data_source_type') or not st.session_state.data_source_type:
+        st.warning("Please select a data source from the sidebar first.")
         st.stop()
 
-    # Create connection and read data from the selected Google Sheet
     conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
+
+    # Load data based on selected data source type
+    if st.session_state.data_source_type == "single_sheet":
+        # Load single Google Sheet
+        df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
+
+        # Replace "新" in column names with "·s"
+        df.columns = df.columns.str.replace("新", "·s", regex=False)
+
+    elif st.session_state.data_source_type == "veev_merge":
+        # Load and merge the two VEEV MacroD PARG sheets
+        with st.spinner("Loading and merging VEEV MacroD PARG datasets..."):
+            # Get available sheets to find the URLs
+            available_sheets = get_google_sheets_from_folder()
+
+            # Find the two specific sheets
+            sheet1_name = "VEEV_MacroD_PARG_AI_Bind_09082025"
+            sheet2_name = "VEEV_MacroD_PARG_Fluor_Pol_07292025"
+
+            if sheet1_name not in available_sheets or sheet2_name not in available_sheets:
+                st.error(f"❌ Could not find required sheets for merge. Looking for:\n- {sheet1_name}\n- {sheet2_name}")
+                st.stop()
+
+            # Load both sheets
+            df1 = conn.read(spreadsheet=available_sheets[sheet1_name]['url'], ttl=0)
+            df2 = conn.read(spreadsheet=available_sheets[sheet2_name]['url'], ttl=0)
+
+            # Remove duplicate rows from df1
+            df1 = df1.drop_duplicates()
+
+            # In the AI Binding sheet, change the Name values from "PARG 1" to "PARG001"
+            assert 'Name' in df1.columns, "Expected 'Name' column in AI Binding sheet"
+            df1['Name'] = df1['Name'].str.replace(r'PARG (\d+)', lambda m: f'PARG{int(m.group(1)):03d}', regex=True)
+
+            # In the Fluorescence Polarization sheet, there are two columns named "PARG Number". Get the column index of the second one. TODO confirm this is correct.
+            assert 'PARG Number.1' in df2.columns, "Expected two 'PARG Number' columns in Fluorescence Polarization sheet"
+            # Rename the second "PARG Number" column to "PARG Number FP" to avoid confusion
+            df2.rename(columns={"PARG Number.1": "PARG Number FP"}, inplace=True)
+
+            # Merge (outer join) the dataframes on AI Binding sheet "Name" column and Fluorescence Polarization sheet "PARG Number FP"
+            df = pd.merge(df1, df2, left_on='Name', right_on='PARG Number FP', how='outer', suffixes=('_AI_Bind', '_FP'))
+
+            # Move "FP binding (uM)" column to the second column position
+            assert "FP binding (uM)" in df.columns, "Expected 'FP binding (uM)' column in merged dataframe"
+            fp_binding_col = df.pop("FP binding (uM)")
+            df.insert(1, "FP binding (uM)", fp_binding_col)
+
+            # Move "PARG Number FP" and "PARG Number" columns to fourth and fifth positions
+            parg_number_fp_col = df.pop("PARG Number FP")
+            parg_number_col = df.pop("PARG Number")
+            df.insert(3, "PARG Number FP", parg_number_fp_col)
+            df.insert(4, "PARG Number", parg_number_col)
+
+            st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
+    else:
+        st.warning("Please select a data source from the sidebar first.")
+        st.stop()
 
     # Main layout with columns
     col1, divider, col2 = st.columns([5, 0.2, 5])
 
     with col1:
         st.header("Data View")
+
+        # Display dataframe
         st.dataframe(df, height=500)
 
         # Data summary
@@ -203,9 +280,14 @@ try:
         st.write(f"**Columns:** {len(df.columns)}")
         st.write(f"**Column Names:** {', '.join(df.columns.tolist())}")
 
-        # Add link to Google Sheet
-        sheet_url = st.session_state.selected_sheet_url
-        st.markdown(f"**[Open Google Sheet]({sheet_url})**")
+        # Add link to Google Sheet(s)
+        if st.session_state.data_source_type == "single_sheet":
+            sheet_url = st.session_state.selected_sheet_url
+            st.markdown(f"**[Open Google Sheet]({sheet_url})**")
+        elif st.session_state.data_source_type == "veev_merge":
+            st.markdown("**Source Sheets:**")
+            st.markdown(f"- [VEEV_MacroD_PARG_AI_Bind_09082025]({available_sheets['VEEV_MacroD_PARG_AI_Bind_09082025']['url']})")
+            st.markdown(f"- [VEEV_MacroD_PARG_Fluor_Pol_07292025]({available_sheets['VEEV_MacroD_PARG_Fluor_Pol_07292025']['url']})")
 
 
     with divider:
@@ -324,9 +406,17 @@ Data types:
             col_btn1, col_btn2 = st.columns([1, 1])
 
             with col_btn1:
-                if st.button("🔬 Summarize SPR Assay Results", use_container_width=True):
-                    spr_prompt = "These are the results of an SPR assay of the PEITHO library on ChikV MacroDomain. Summarize these results."
-                    # Add the hardcoded prompt to chat and trigger response
+                if st.button("🔬 Summarize Results", use_container_width=True):
+                    # Generate dynamic prompt based on data source
+                    if st.session_state.data_source_type == "single_sheet":
+                        sheet_name = selected_sheet_name
+                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. The "X - Binding Score" column corresponds to the AI Binding Assay results. Summarize these results, and in particular, note contrasts between the assay results.'
+                    elif st.session_state.data_source_type == "veev_merge":
+                        sheet_names = "VEEV_MacroD_PARG_AI_Bind_09082025 and VEEV_MacroD_PARG_Fluor_Pol_07292025"
+                        spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. The "X - Binding Score" column corresponds to the AI Binding Assay results. Summarize these results, and in particular, note contrasts between the assay results.'
+                    else:
+                        spr_prompt = "Summarize these results."
+                    # Add the prompt to chat and trigger response
                     st.session_state.messages.append({"role": "user", "content": spr_prompt})
                     st.rerun()
 
