@@ -241,6 +241,9 @@ try:
             assert 'Name' in df1.columns, "Expected 'Name' column in AI Binding sheet"
             df1['Name'] = df1['Name'].str.replace(r'PARG (\d+)', lambda m: f'PARG{int(m.group(1)):03d}', regex=True)
 
+            # In the AI Binding sheet, rename "VEEV - Binding Score" to "VEEV - Binding Score AI Binding"
+            df1.rename(columns={"VEEV - Binding Score": "VEEV - Binding Score AI Binding"}, inplace=True)
+
             # In the Fluorescence Polarization sheet, there are two columns named "PARG Number". Get the column index of the second one. TODO confirm this is correct.
             assert 'PARG Number.1' in df2.columns, "Expected two 'PARG Number' columns in Fluorescence Polarization sheet"
             # Rename the second "PARG Number" column to "PARG Number FP" to avoid confusion
@@ -410,10 +413,10 @@ Data types:
                     # Generate dynamic prompt based on data source
                     if st.session_state.data_source_type == "single_sheet":
                         sheet_name = selected_sheet_name
-                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. The "X - Binding Score" column corresponds to the AI Binding Assay results. Summarize these results, and in particular, note contrasts between the assay results.'
+                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results.'
                     elif st.session_state.data_source_type == "veev_merge":
                         sheet_names = "VEEV_MacroD_PARG_AI_Bind_09082025 and VEEV_MacroD_PARG_Fluor_Pol_07292025"
-                        spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. The "X - Binding Score" column corresponds to the AI Binding Assay results. Summarize these results, and in particular, note contrasts between the assay results.'
+                        spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results, and in particular, note contrasts between the assay results.'
                     else:
                         spr_prompt = "Summarize these results."
                     # Add the prompt to chat and trigger response
