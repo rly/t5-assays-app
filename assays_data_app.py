@@ -271,10 +271,10 @@ try:
             # Merge (outer join) the dataframes on AI Binding sheet "Name" column and Fluorescence Polarization sheet "PARG Number FP"
             df = pd.merge(df1, df2, left_on='Name', right_on='IDNUMBER', how='outer', suffixes=('_AI_Bind', '_SPR'))
 
-            # Move "VEEV - Binding Score" column to the second column position
+            # Move "VEEV - Binding Score" column to the second column position and rename it to "VEEV - AI Binding Score"
             assert "VEEV - Binding Score" in df.columns, "Expected 'VEEV - Binding Score' column in merged dataframe"
             binding_score_col = df.pop("VEEV - Binding Score")
-            df.insert(1, "VEEV - Binding Score", binding_score_col)
+            df.insert(1, "VEEV - AI Binding Score", binding_score_col)
 
             # Move "kD[1/s]" column to the third column position
             assert "kD[1/s]" in df.columns, "Expected 'kD[1/s]' column in merged dataframe"
@@ -318,8 +318,8 @@ try:
             assert 'Name' in df1.columns, "Expected 'Name' column in AI Binding sheet"
             df1['Name'] = df1['Name'].str.replace(r'PARG (\d+)', lambda m: f'PARG{int(m.group(1)):03d}', regex=True)
 
-            # In the AI Binding sheet, rename "VEEV - Binding Score" to "VEEV - Binding Score AI Binding"
-            df1.rename(columns={"VEEV - Binding Score": "VEEV - Binding Score AI Binding"}, inplace=True)
+            # In the AI Binding sheet, rename "VEEV - Binding Score" to "VEEV - AI Binding Score"
+            df1.rename(columns={"VEEV - Binding Score": "VEEV - AI Binding Score"}, inplace=True)
 
             # In the Fluorescence Polarization sheet, there are two columns named "PARG Number". Get the column index of the second one. TODO confirm this is correct.
             assert 'PARG Number.1' in df2.columns, "Expected two 'PARG Number' columns in Fluorescence Polarization sheet"
@@ -497,16 +497,21 @@ Data types:
             with col_btn1:
                 if st.button("🔬 Summarize Results", use_container_width=True):
                     # Generate dynamic prompt based on data source
-                    if st.session_state.data_source_type == "single_sheet":
-                        sheet_name = selected_sheet_name
-                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results.'
-                    elif st.session_state.data_source_type == "veev_merge":
+                    if st.session_state.data_source_type == "veev_peitho_merge":
+                        sheet_names = "PIETHOS_AI-docking_V2_F-converted and VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025"
+                        spr_prompt = f'These are the results from {sheet_names} merged, which represent the results of an AI Binding Assay and SPR Assay for the PEITHO compound library on the VEEV MacroDomain. Summarize these results, and in particular, note contrasts between the AI assay results (VEEV - Binding Score) and SPR assay results "kD[1/s]".'
+                    elif st.session_state.data_source_type == "veev_parg_merge":
                         sheet_names = "VEEV_MacroD_PARG_AI_Bind_09082025 and VEEV_MacroD_PARG_Fluor_Pol_07292025"
                         spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results, and in particular, note contrasts between the assay results.'
+                    elif st.session_state.data_source_type == "single_sheet":
+                        sheet_name = selected_sheet_name
+                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results.'
                     else:
                         spr_prompt = "Summarize these results."
+
                     # Add the prompt to chat and trigger response
                     st.session_state.messages.append({"role": "user", "content": spr_prompt})
+                    # TODO don't re-run the whole app here which re-processes the data
                     st.rerun()
 
             with col_btn2:
