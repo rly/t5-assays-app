@@ -3,3 +3,4 @@ st-gsheets-connection>=0.1.0
 requests>=2.32.5
 google-api-python-client>=2.0.0
 google-auth>=2.0.0
+pubchempy>=1.0.5

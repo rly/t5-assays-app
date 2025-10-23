@@ -4,6 +4,8 @@ import requests
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 import pandas as pd
+import urllib.parse
+import time
 
 # Set the page configuration to use a wide layout
 st.set_page_config(layout="wide", page_title="T5 Assays Data Assistant", page_icon="🧬")
@@ -59,6 +61,38 @@ def get_google_sheets_from_folder():
     except Exception as e:
         st.error(f"Error accessing Google Drive: {str(e)}")
         return {}
+
+# TODO this really should be cached in the file input
+# TODO some requests fail, e.g., F0207-0534 returns 400 error
+def get_pubchem_urls(smiles_list: list[str]) -> list[str]:
+    """Get list of Pubchem URLs for a list of SMILES strings"""
+    results = []
+
+    # URL encode SMILES strings
+    smiles_list = [urllib.parse.quote(smiles) for smiles in smiles_list]
+
+    for smiles in smiles_list:
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/{smiles}/cids/JSON"
+
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                cids = data['IdentifierList']['CID']
+                assert len(cids) == 1, f"Expected one CID for SMILES {smiles}, got {len(cids)}"
+                cid = cids[0]
+                urls = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}"
+                results.append(urls)
+            else:
+                print(f"PubChem request for {smiles} failed: {response.status_code}")
+
+        except Exception as e:
+            print(f"Error processing {smiles}: {e}")
+
+        # Rate limiting: PubChem allows max 5 requests per second
+        time.sleep(0.25)  # 4 requests per second to be safe
+
+    return results
 
 model_mapping = {
     "OpenAI GPT-OSS 20B (free)": "openai/gpt-oss-20b:free",
@@ -124,11 +158,21 @@ with st.sidebar:
     # Radio button for data source type
     data_source_type = st.radio(
         "Choose data source:",
-        options=["VEEV MacroD PARG Merge", "Google Sheet"],
+        options=["VEEV MacroD PEITHO Merge", "VEEV MacroD PARG Merge", "Google Sheet"],
         help="Select merged VEEV MacroD PARG dataset or a single Google Sheet"
     )
 
-    if data_source_type == "Google Sheet":
+    if data_source_type == "VEEV MacroD PEITHO Merge":
+        st.success("✅ Selected: VEEV MacroD PEITHO Merge")
+        st.session_state.data_source_type = "veev_peitho_merge"
+        st.session_state.selected_sheet_url = None
+        st.session_state.selected_sheet_id = None
+    elif data_source_type == "VEEV MacroD PARG Merge":
+        st.success("✅ Selected: VEEV MacroD PARG Merge")
+        st.session_state.data_source_type = "veev_parg_merge"
+        st.session_state.selected_sheet_url = None
+        st.session_state.selected_sheet_id = None
+    else:  # data_source_type == "Google Sheet":
         with st.spinner("Loading available sheets..."):
             available_sheets = get_google_sheets_from_folder()
 
@@ -152,12 +196,6 @@ with st.sidebar:
             st.session_state.selected_sheet_url = None
             st.session_state.selected_sheet_id = None
             st.session_state.data_source_type = None
-    else:
-        # VEEV MacroD PARG Merge option
-        st.success("✅ Selected: VEEV MacroD PARG Merge")
-        st.session_state.data_source_type = "veev_merge"
-        st.session_state.selected_sheet_url = None
-        st.session_state.selected_sheet_id = None
 
     st.markdown("---")
 
@@ -209,14 +247,53 @@ try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 
     # Load data based on selected data source type
-    if st.session_state.data_source_type == "single_sheet":
-        # Load single Google Sheet
-        df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
+    if st.session_state.data_source_type == "veev_peitho_merge":
+        # Load and merge the two VEEV MacroD PARG sheets
+        with st.spinner("Loading and merging VEEV MacroD PEITHO datasets..."):
+            # Get available sheets to find the URLs
+            available_sheets = get_google_sheets_from_folder()
 
-        # Replace "新" in column names with "·s"
-        df.columns = df.columns.str.replace("新", "·s", regex=False)
+            # Find the two specific sheets
+            sheet1_name = "PIETHOS_AI-docking_V2_F-converted"
+            sheet2_name = "VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025"
 
-    elif st.session_state.data_source_type == "veev_merge":
+            if sheet1_name not in available_sheets or sheet2_name not in available_sheets:
+                st.error(f"❌ Could not find required sheets for merge. Looking for:\n- {sheet1_name}\n- {sheet2_name}")
+                st.stop()
+
+            # Load both sheets
+            df1 = conn.read(spreadsheet=available_sheets[sheet1_name]['url'], ttl=0)
+            df2 = conn.read(spreadsheet=available_sheets[sheet2_name]['url'], ttl=0)
+
+            # Remove duplicate rows from df1
+            df1 = df1.drop_duplicates()
+
+            # Merge (outer join) the dataframes on AI Binding sheet "Name" column and Fluorescence Polarization sheet "PARG Number FP"
+            df = pd.merge(df1, df2, left_on='Name', right_on='IDNUMBER', how='outer', suffixes=('_AI_Bind', '_SPR'))
+
+            # Move "VEEV - Binding Score" column to the second column position
+            assert "VEEV - Binding Score" in df.columns, "Expected 'VEEV - Binding Score' column in merged dataframe"
+            binding_score_col = df.pop("VEEV - Binding Score")
+            df.insert(1, "VEEV - Binding Score", binding_score_col)
+
+            # Move "kD[1/s]" column to the third column position
+            assert "kD[1/s]" in df.columns, "Expected 'kD[1/s]' column in merged dataframe"
+            kd_col = df.pop("kD[1/s]")
+            df.insert(2, "kD[1/s]", kd_col)
+
+            # Move "IDNUMBER" column to the fourth column position
+            assert "IDNUMBER" in df.columns, "Expected 'IDNUMBER' column in merged dataframe"
+            idnumber_col = df.pop("IDNUMBER")
+            df.insert(3, "IDNUMBER", idnumber_col)
+
+            # Replace "Structure" column with Pubchem URLs
+            # assert "Structure" in df.columns, "Expected 'Structure' column in merged dataframe"
+            # df["Structure"] = get_pubchem_urls(df["Structure"].astype(str).tolist())
+            # TODO re-enable when the requests are reliable
+
+            st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
+
+    elif st.session_state.data_source_type == "veev_parg_merge":
         # Load and merge the two VEEV MacroD PARG sheets
         with st.spinner("Loading and merging VEEV MacroD PARG datasets..."):
             # Get available sheets to find the URLs
@@ -263,7 +340,16 @@ try:
             df.insert(3, "PARG Number FP", parg_number_fp_col)
             df.insert(4, "PARG Number", parg_number_col)
 
+            # Sort by "FP binding (uM)" column (ascending order, with NaN values last)
+            df = df.sort_values(by="FP binding (uM)", ascending=True, na_position='last')
+
             st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
+    elif st.session_state.data_source_type == "single_sheet":
+        # Load single Google Sheet
+        df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
+
+        # Replace "新" in column names with "·s"
+        df.columns = df.columns.str.replace("新", "·s", regex=False)
     else:
         st.warning("Please select a data source from the sidebar first.")
         st.stop()
