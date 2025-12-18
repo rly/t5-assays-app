@@ -256,20 +256,23 @@ try:
             # Merge (outer join) the dataframes on AI Binding sheet "Name" column and Fluorescence Polarization sheet "PARG Number FP"
             df = pd.merge(df1, df2, left_on='Name', right_on='IDNUMBER', how='outer', suffixes=('_AI_Bind', '_SPR'))
 
-            # Move "VEEV - Binding Score" column to the second column position and rename it to "VEEV - AI Binding Score"
-            assert "VEEV - Binding Score" in df.columns, "Expected 'VEEV - Binding Score' column in merged dataframe"
-            binding_score_col = df.pop("VEEV - Binding Score")
-            df.insert(1, "VEEV - AI Binding Score", binding_score_col)
-
-            # Move "Chi2_ndof_RU2" column to the third column position
+            # Move "Chi2_ndof_RU2" column to the second column position
             assert "Chi2_ndof_RU2" in df.columns, "Expected 'Chi2_ndof_RU2' column in merged dataframe"
             chi2_col = df.pop("Chi2_ndof_RU2")
-            df.insert(2, "Chi2_ndof_RU2", chi2_col)
+            df.insert(1, "Chi2_ndof_RU2", chi2_col)
+
+            # Move "VEEV - Binding Score" column to the third column position and rename it to "VEEV - AI Binding Score"
+            assert "VEEV - Binding Score" in df.columns, "Expected 'VEEV - Binding Score' column in merged dataframe"
+            binding_score_col = df.pop("VEEV - Binding Score")
+            df.insert(2, "VEEV - AI Binding Score", binding_score_col)
 
             # Move "IDNUMBER" column to the fourth column position
             assert "IDNUMBER" in df.columns, "Expected 'IDNUMBER' column in merged dataframe"
             idnumber_col = df.pop("IDNUMBER")
             df.insert(3, "IDNUMBER", idnumber_col)
+
+            # Sort by "Chi2_ndof_RU2" column (ascending order, with NaN values last)
+            df = df.sort_values(by="Chi2_ndof_RU2", ascending=True, na_position='last')
 
             # Replace "Structure" column with Pubchem URLs
             # assert "Structure" in df.columns, "Expected 'Structure' column in merged dataframe"
