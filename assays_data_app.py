@@ -6,6 +6,8 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import urllib.parse
 import time
+import plotly.express as px
+import numpy as np
 
 # Set the page configuration to use a wide layout
 st.set_page_config(layout="wide", page_title="T5 Assays Data Assistant", page_icon="🧬")
@@ -102,7 +104,7 @@ model_mapping = {
     "Claude Sonnet 4 ($$$)": "anthropic/claude-4-sonnet",
 }
 
-# Custom CSS for column styling
+# Custom CSS for styling
 st.markdown("""
 <style>
     /* Set the width of the sidebar */
@@ -118,23 +120,6 @@ st.markdown("""
     /* Set the padding of the main content area */
     div[data-testid="stMainBlockContainer"] {
         padding: 2rem 1rem;
-    }
-
-    /* Style the divider column */
-    [data-testid="column"]:nth-child(2) {
-        display: flex !important;
-        justify-content: center !important;
-        align-items: flex-start !important;
-        padding-top: 50px !important;
-    }
-
-    /* Enhance the visual separator */
-    .column-divider {
-        width: 3px !important;
-        background: #C7C7C7 !important;
-        height: 100% !important;
-        min-height: 100vh !important;
-        border-radius: 2px !important;
     }
 
     /* Improve overall spacing */
@@ -276,10 +261,10 @@ try:
             binding_score_col = df.pop("VEEV - Binding Score")
             df.insert(1, "VEEV - AI Binding Score", binding_score_col)
 
-            # Move "kD[1/s]" column to the third column position
-            assert "kD[1/s]" in df.columns, "Expected 'kD[1/s]' column in merged dataframe"
-            kd_col = df.pop("kD[1/s]")
-            df.insert(2, "kD[1/s]", kd_col)
+            # Move "Chi2_ndof_RU2" column to the third column position
+            assert "Chi2_ndof_RU2" in df.columns, "Expected 'Chi2_ndof_RU2' column in merged dataframe"
+            chi2_col = df.pop("Chi2_ndof_RU2")
+            df.insert(2, "Chi2_ndof_RU2", chi2_col)
 
             # Move "IDNUMBER" column to the fourth column position
             assert "IDNUMBER" in df.columns, "Expected 'IDNUMBER' column in merged dataframe"
@@ -347,40 +332,73 @@ try:
     elif st.session_state.data_source_type == "single_sheet":
         # Load single Google Sheet
         df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
-
-        # Replace "新" in column names with "·s"
-        df.columns = df.columns.str.replace("新", "·s", regex=False)
     else:
         st.warning("Please select a data source from the sidebar first.")
         st.stop()
 
-    # Main layout with columns
-    col1, divider, col2 = st.columns([5, 0.2, 5])
+    # Replace "新" in column names with "·s" (applies to all data sources)
+    df.columns = df.columns.str.replace("新", "·s", regex=False)
 
-    with col1:
-        st.header("Data View")
+    # Data View section
+    st.header("Data View")
 
-        # Display dataframe
-        st.dataframe(df, height=500)
+    # Display dataframe
+    st.dataframe(df, height=500)
 
-        # Data summary
-        st.subheader("Data Summary")
-        st.write(f"**Rows:** {len(df)}")
-        st.write(f"**Columns:** {len(df.columns)}")
-        st.write(f"**Column Names:** {', '.join(df.columns.tolist())}")
+    # Data summary
+    st.subheader("Data Summary")
 
-        # Add link to Google Sheet(s)
-        if st.session_state.data_source_type == "single_sheet":
-            sheet_url = st.session_state.selected_sheet_url
-            st.markdown(f"**[Open Google Sheet]({sheet_url})**")
-        elif st.session_state.data_source_type == "veev_merge":
-            st.markdown("**Source Sheets:**")
-            st.markdown(f"- [VEEV_MacroD_PARG_AI_Bind_09082025]({available_sheets['VEEV_MacroD_PARG_AI_Bind_09082025']['url']})")
-            st.markdown(f"- [VEEV_MacroD_PARG_Fluor_Pol_07292025]({available_sheets['VEEV_MacroD_PARG_Fluor_Pol_07292025']['url']})")
+    # Scatter plot for VEEV - AI Binding Score vs Chi2_ndof_RU2
+    x_col = "VEEV - AI Binding Score"
+    y_col = "Chi2_ndof_RU2"
+    if x_col in df.columns and y_col in df.columns:
+        # Filter out rows with missing values for the scatter plot
+        plot_df = df[[x_col, y_col]].dropna()
 
+        if len(plot_df) > 0:
+            # Filter to positive y values only for log scale
+            plot_df_log = plot_df[plot_df[y_col] > 0].copy()
 
-    with divider:
-        st.markdown('<div class="column-divider"></div>', unsafe_allow_html=True)
+            if len(plot_df_log) > 0:
+                # Calculate correlation with log-transformed y
+                log_y = np.log10(plot_df_log[y_col])
+                correlation = np.corrcoef(plot_df_log[x_col], log_y)[0, 1]
+
+                # Create scatter plot with log y-axis
+                fig = px.scatter(
+                    plot_df_log,
+                    x=x_col,
+                    y=y_col,
+                    trendline="ols",
+                    trendline_options=dict(log_y=True),
+                    title=f"{x_col} vs {y_col} (Correlation: r = {correlation:.3f})",
+                )
+                fig.update_layout(
+                    xaxis_title=x_col,
+                    yaxis_title=f"log({y_col})",
+                    yaxis_type="log",
+                    height=400,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"No positive y-values for log-scale scatter plot.")
+        else:
+            st.warning(f"No valid data points for {x_col} vs {y_col} scatter plot.")
+
+    st.write(f"**Rows:** {len(df)}")
+    st.write(f"**Columns:** {len(df.columns)}")
+    st.write(f"**Column Names:** {', '.join(df.columns.tolist())}")
+
+    # Add link to Google Sheet(s)
+    if st.session_state.data_source_type == "single_sheet":
+        sheet_url = st.session_state.selected_sheet_url
+        st.markdown(f"**[Open Google Sheet]({sheet_url})**")
+    elif st.session_state.data_source_type == "veev_merge":
+        st.markdown("**Source Sheets:**")
+        st.markdown(f"- [VEEV_MacroD_PARG_AI_Bind_09082025]({available_sheets['VEEV_MacroD_PARG_AI_Bind_09082025']['url']})")
+        st.markdown(f"- [VEEV_MacroD_PARG_Fluor_Pol_07292025]({available_sheets['VEEV_MacroD_PARG_Fluor_Pol_07292025']['url']})")
+
+    st.markdown("---")
 
     def generate_ai_response(prompt, df, openrouter_api_key, model):
         """Generate AI response for a given prompt"""
@@ -442,90 +460,83 @@ Data types:
             st.error(error_msg)
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
-    with col2:
-        st.header("AI Chat")
+    # AI Chat section at the bottom
+    st.header("AI Chat")
 
-        # Chat interface
-        if openrouter_api_key and model_allowed:
-            # Initialize chat history in session state
-            if "messages" not in st.session_state:
+    # Chat interface
+    if openrouter_api_key and model_allowed:
+        # Initialize chat history in session state
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # Display chat history
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # Check if the last message is from user and needs a response
+        needs_response = (
+            len(st.session_state.messages) > 0 and
+            st.session_state.messages[-1]["role"] == "user"
+        )
+
+        # If there's a pending user message, process it
+        if needs_response:
+            prompt = st.session_state.messages[-1]["content"]
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    try:
+                        generate_ai_response(prompt, df, openrouter_api_key, model)
+                    except Exception as e:
+                        error_msg = f"An error occurred: {str(e)}"
+                        st.error(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
+        # Chat input (using text_input instead of chat_input to avoid sticky bottom)
+        with st.form(key="chat_form", clear_on_submit=True):
+            prompt = st.text_input("Ask a question about the data...", key="chat_input", label_visibility="collapsed")
+            submit_button = st.form_submit_button("Send", use_container_width=True)
+
+        if submit_button and prompt:
+            # Add user message to chat history
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.rerun()
+
+        # Quick action buttons
+        col_btn1, col_btn2 = st.columns([1, 1])
+
+        with col_btn1:
+            if st.button("🔬 Summarize Results", use_container_width=True):
+                # Generate dynamic prompt based on data source
+                if st.session_state.data_source_type == "veev_peitho_merge":
+                    sheet_names = "PIETHOS_AI-docking_V2_F-converted and VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025"
+                    spr_prompt = f'These are the results from {sheet_names} merged, which represent the results of an AI Binding Assay and SPR Assay for the PEITHO compound library on the VEEV MacroDomain. Summarize these results, and in particular, note contrasts between the AI assay results (VEEV - Binding Score) and SPR assay results "Chi2_ndof_RU2".'
+                elif st.session_state.data_source_type == "veev_parg_merge":
+                    sheet_names = "VEEV_MacroD_PARG_AI_Bind_09082025 and VEEV_MacroD_PARG_Fluor_Pol_07292025"
+                    spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results, and in particular, note contrasts between the assay results.'
+                elif st.session_state.data_source_type == "single_sheet":
+                    sheet_name = selected_sheet_name
+                    spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results.'
+                else:
+                    spr_prompt = "Summarize these results."
+
+                # Add the prompt to chat and trigger response
+                st.session_state.messages.append({"role": "user", "content": spr_prompt})
+                # TODO don't re-run the whole app here which re-processes the data
+                st.rerun()
+
+        with col_btn2:
+            if st.button("🗑️ Clear Chat History", use_container_width=True):
                 st.session_state.messages = []
+                st.rerun()
 
-            # Display chat history
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
+    else:
+        if not openrouter_api_key:
+            st.info("👆 Please provide an OpenRouter API key in the sidebar to start asking questions about your data.")
+        elif not model_allowed:
+            st.info("⚠️ Please select a free model or provide your own API key to use paid models.")
 
-            # Check if the last message is from user and needs a response
-            needs_response = (
-                len(st.session_state.messages) > 0 and
-                st.session_state.messages[-1]["role"] == "user"
-            )
-
-            # If there's a pending user message, process it
-            if needs_response:
-                prompt = st.session_state.messages[-1]["content"]
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        try:
-                            generate_ai_response(prompt, df, openrouter_api_key, model)
-                        except Exception as e:
-                            error_msg = f"An error occurred: {str(e)}"
-                            st.error(error_msg)
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
-            # Chat input
-            if prompt := st.chat_input("Ask a question about the data..."):
-                # Add user message to chat history
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                # Generate assistant response
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        try:
-                            generate_ai_response(prompt, df, openrouter_api_key, model)
-                        except Exception as e:
-                            error_msg = f"An error occurred: {str(e)}"
-                            st.error(error_msg)
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
-            # Quick action buttons
-            col_btn1, col_btn2 = st.columns([1, 1])
-
-            with col_btn1:
-                if st.button("🔬 Summarize Results", use_container_width=True):
-                    # Generate dynamic prompt based on data source
-                    if st.session_state.data_source_type == "veev_peitho_merge":
-                        sheet_names = "PIETHOS_AI-docking_V2_F-converted and VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025"
-                        spr_prompt = f'These are the results from {sheet_names} merged, which represent the results of an AI Binding Assay and SPR Assay for the PEITHO compound library on the VEEV MacroDomain. Summarize these results, and in particular, note contrasts between the AI assay results (VEEV - Binding Score) and SPR assay results "kD[1/s]".'
-                    elif st.session_state.data_source_type == "veev_parg_merge":
-                        sheet_names = "VEEV_MacroD_PARG_AI_Bind_09082025 and VEEV_MacroD_PARG_Fluor_Pol_07292025"
-                        spr_prompt = f'These are the results from {sheet_names}. e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results, and in particular, note contrasts between the assay results.'
-                    elif st.session_state.data_source_type == "single_sheet":
-                        sheet_name = selected_sheet_name
-                        spr_prompt = f'These are the results from "{sheet_name}". e.g., "VEEV_MacroD_PARG_AI_Bind_09082025" means the results of an AI Binding Assay for the PARG compound library on the VEEV MacroDomain, done on 9/8/2025. Summarize these results.'
-                    else:
-                        spr_prompt = "Summarize these results."
-
-                    # Add the prompt to chat and trigger response
-                    st.session_state.messages.append({"role": "user", "content": spr_prompt})
-                    # TODO don't re-run the whole app here which re-processes the data
-                    st.rerun()
-
-            with col_btn2:
-                if st.button("🗑️ Clear Chat History", use_container_width=True):
-                    st.session_state.messages = []
-                    st.rerun()
-
-        else:
-            if not openrouter_api_key:
-                st.info("👆 Please provide an OpenRouter API key in the sidebar to start asking questions about your data.")
-            elif not model_allowed:
-                st.info("⚠️ Please select a free model or provide your own API key to use paid models.")
-
-            example_questions = """
+        example_questions = """
 #### Examples:
 - What are the main columns in this dataset?
 - Can you summarize the key findings from this data?
@@ -533,7 +544,7 @@ Data types:
 - Are there any outliers or anomalies?
 - What insights can you provide about this dataset?
 """
-            st.info(example_questions)
+        st.info(example_questions)
 
 except Exception as e:
     st.error(f"Error loading Google Sheet: {str(e)}")
