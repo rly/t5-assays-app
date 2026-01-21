@@ -110,7 +110,7 @@ st.markdown("""
 <style>
     /* Set the width of the sidebar */
     section[data-testid="stSidebar"] {
-        width: 550px !important;
+        width: 400px !important;
     }
 
     /* Always show the collapse button */
@@ -136,28 +136,27 @@ st.title("🧬 T5 Assays Data Assistant")
 
 # Sidebar for API key input
 with st.sidebar:
-    st.header("Configuration")
-
     # Data source selection
-    st.subheader("📊 Select Data Source")
-
-    # Radio button for data source type
+    st.subheader("📊 Data Source")
     data_source_type = st.radio(
         "Choose data source:",
         options=["VEEV MacroD PEITHO Merge", "VEEV MacroD PARG Merge", "Google Sheet"],
-        help="Select merged VEEV MacroD PARG dataset or a single Google Sheet"
+        help="Select merged VEEV MacroD PARG dataset or a single Google Sheet",
+        label_visibility="collapsed"
     )
 
     if data_source_type == "VEEV MacroD PEITHO Merge":
-        st.success("✅ Selected: VEEV MacroD PEITHO Merge")
         st.session_state.data_source_type = "veev_peitho_merge"
         st.session_state.selected_sheet_url = None
         st.session_state.selected_sheet_id = None
+        # Placeholder for merge status (will be updated after data loads)
+        merge_status_placeholder = st.empty()
     elif data_source_type == "VEEV MacroD PARG Merge":
-        st.success("✅ Selected: VEEV MacroD PARG Merge")
         st.session_state.data_source_type = "veev_parg_merge"
         st.session_state.selected_sheet_url = None
         st.session_state.selected_sheet_id = None
+        # Placeholder for merge status (will be updated after data loads)
+        parg_merge_status_placeholder = st.empty()
     else:  # data_source_type == "Google Sheet":
         with st.spinner("Loading available sheets..."):
             available_sheets = get_google_sheets_from_folder()
@@ -171,9 +170,6 @@ with st.sidebar:
 
             if selected_sheet_name:
                 selected_sheet_info = available_sheets[selected_sheet_name]
-                st.success(f"✅ Selected: {selected_sheet_name}")
-
-                # Store selected sheet info in session state
                 st.session_state.selected_sheet_url = selected_sheet_info['url']
                 st.session_state.selected_sheet_id = selected_sheet_info['id']
                 st.session_state.data_source_type = "single_sheet"
@@ -183,32 +179,39 @@ with st.sidebar:
             st.session_state.selected_sheet_id = None
             st.session_state.data_source_type = None
 
-    st.markdown("---")
+    # Data filtering options (only show for VEEV PEITHO merge)
+    if data_source_type == "VEEV MacroD PEITHO Merge":
+        st.subheader("🔍 Data Filters")
+        chi2_max = st.number_input(
+            "Chi2_ndof_RU2 <",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+            help="Filter to include only rows where Chi2_ndof_RU2 is less than this value"
+        )
+        rmse_max = st.number_input(
+            "RMSE_RU <",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+            help="Filter to include only rows where RMSE_RU is less than this value"
+        )
+        st.session_state.chi2_max = chi2_max
+        st.session_state.rmse_max = rmse_max
+        # Placeholder for filter status (will be updated after data loads)
+        filter_status_placeholder = st.empty()
 
-    # OpenRouter API key input
+    # AI Model settings
+    st.subheader("🤖 AI Model")
     default_api_key = st.secrets.get("openrouter", {}).get("api_key", "")
-
     openrouter_api_key = st.text_input(
         "OpenRouter API Key",
         type="password",
         value=default_api_key,
         help="Enter your OpenRouter API key to enable AI chat functionality. A default key is provided for free models only."
     )
-
-    # Check if using default key
     using_default_key = openrouter_api_key == default_api_key and default_api_key
 
-    if openrouter_api_key:
-        if using_default_key:
-            st.info("🔓 Using default API key (free models only)")
-        else:
-            st.success("✅ Custom API Key provided")
-    else:
-        st.warning("⚠️ Please provide an OpenRouter API key to use the chat feature")
-
-    st.markdown("---")
-
-    # Model selection
     model = st.selectbox(
         "Select [AI Model](https://openrouter.ai/models)",
         list(model_mapping.keys()),
@@ -216,9 +219,8 @@ with st.sidebar:
         help="Choose the AI model to use for answering questions"
     )
 
-    # Validate model selection with default key
     if using_default_key and model not in ("OpenAI GPT-OSS 20B (free)", "NVIDIA: Nemotron 3 Nano 30B A3B (free)"):
-        st.error("❌ Non-free models require your own API key. Please enter your own OpenRouter API key to use paid models.")
+        st.error("❌ Non-free models require your own API key.")
         model_allowed = False
     else:
         model_allowed = True
@@ -262,15 +264,28 @@ try:
             chi2_col = df.pop("Chi2_ndof_RU2")
             df.insert(1, "Chi2_ndof_RU2", chi2_col)
 
-            # Move "VEEV - Binding Score" column to the third column position and rename it to "VEEV - AI Binding Score"
+            # Move "RMSE_RU" column to after Chi2_ndof_RU2
+            if "RMSE_RU" in df.columns:
+                rmse_col = df.pop("RMSE_RU")
+                df.insert(2, "RMSE_RU", rmse_col)
+
+            # Move "VEEV - Binding Score" column and rename it to "VEEV - AI Binding Score"
             assert "VEEV - Binding Score" in df.columns, "Expected 'VEEV - Binding Score' column in merged dataframe"
             binding_score_col = df.pop("VEEV - Binding Score")
-            df.insert(2, "VEEV - AI Binding Score", binding_score_col)
+            df.insert(3, "VEEV - AI Binding Score", binding_score_col)
 
-            # Move "IDNUMBER" column to the fourth column position
+            # Move KA* and KD* columns to before IDNUMBER
+            ka_kd_cols = [col for col in df.columns if col.startswith(('kA', 'kD', 'KA', 'KD'))]
+            insert_pos = 4  # After VEEV - AI Binding Score
+            for col in ka_kd_cols:
+                col_data = df.pop(col)
+                df.insert(insert_pos, col, col_data)
+                insert_pos += 1
+
+            # Move "IDNUMBER" column after KA/KD columns
             assert "IDNUMBER" in df.columns, "Expected 'IDNUMBER' column in merged dataframe"
             idnumber_col = df.pop("IDNUMBER")
-            df.insert(3, "IDNUMBER", idnumber_col)
+            df.insert(insert_pos, "IDNUMBER", idnumber_col)
 
             # Sort by "Chi2_ndof_RU2" column (ascending order, with NaN values last)
             df = df.sort_values(by="Chi2_ndof_RU2", ascending=True, na_position='last')
@@ -280,7 +295,19 @@ try:
             # df["Structure"] = get_pubchem_urls(df["Structure"].astype(str).tolist())
             # TODO re-enable when the requests are reliable
 
-            st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
+            # Update merge status in sidebar
+            merge_status_placeholder.success(f"✅ Merged {len(df1)} + {len(df2)} rows")
+
+            # Apply filters from sidebar
+            original_len = len(df)
+            chi2_max = st.session_state.get("chi2_max", 10.0)
+            rmse_max = st.session_state.get("rmse_max", 10.0)
+            df["Chi2_ndof_RU2"] = pd.to_numeric(df["Chi2_ndof_RU2"], errors='coerce')
+            df["RMSE_RU"] = pd.to_numeric(df["RMSE_RU"], errors='coerce')
+            df = df[(df["Chi2_ndof_RU2"] < chi2_max) | df["Chi2_ndof_RU2"].isna()]
+            df = df[(df["RMSE_RU"] < rmse_max) | df["RMSE_RU"].isna()]
+            # Update filter status in sidebar
+            filter_status_placeholder.info(f"🔍 Filtered to {len(df)} rows (from {original_len})")
 
     elif st.session_state.data_source_type == "veev_parg_merge":
         # Load and merge the two VEEV MacroD PARG sheets
@@ -335,7 +362,8 @@ try:
             df = df.sort_values(by="_sort_key", ascending=True, na_position='last')
             df = df.drop(columns=["_sort_key"])
 
-            st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
+            # Update merge status in sidebar
+            parg_merge_status_placeholder.success(f"✅ Merged {len(df1)} + {len(df2)} rows")
     elif st.session_state.data_source_type == "single_sheet":
         # Load single Google Sheet
         df = conn.read(spreadsheet=st.session_state.selected_sheet_url, ttl=0)
@@ -347,7 +375,7 @@ try:
     df.columns = df.columns.str.replace("新", "·s", regex=False)
 
     # Data View section
-    st.header("Data View")
+    st.subheader("Data View")
 
     # Display dataframe
     st.dataframe(df, height=500)
@@ -523,9 +551,6 @@ try:
         else:
             st.warning(f"No valid data points for {x_col} vs {y_col} scatter plot.")
 
-    st.write(f"**Rows:** {len(df)}")
-    st.write(f"**Columns:** {len(df.columns)}")
-    st.write(f"**Column Names:** {', '.join(df.columns.tolist())}")
 
     # Add link to Google Sheet(s)
     if st.session_state.data_source_type == "single_sheet":
@@ -696,7 +721,7 @@ Data types:
             st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
     # AI Chat section at the bottom
-    st.header("AI Chat")
+    st.subheader("AI Chat")
 
     # Chat interface
     if openrouter_api_key and model_allowed:
