@@ -98,6 +98,7 @@ def get_pubchem_urls(smiles_list: list[str]) -> list[str]:
 
 model_mapping = {
     "OpenAI GPT-OSS 20B (free)": "openai/gpt-oss-20b:free",
+    "NVIDIA: Nemotron 3 Nano 30B A3B (free)": "nvidia/nemotron-3-nano-30b-a3b:free",
     "Gemini 2.5 Flash ($)": "google/gemini-2.5-flash",
     "GPT-5 Mini ($)": "openai/gpt-5-mini",
     "GPT-5 ($$)": "openai/gpt-5",
@@ -216,7 +217,7 @@ with st.sidebar:
     )
 
     # Validate model selection with default key
-    if using_default_key and model not in ("OpenAI GPT-OSS 20B (free)",):
+    if using_default_key and model not in ("OpenAI GPT-OSS 20B (free)", "NVIDIA: Nemotron 3 Nano 30B A3B (free)"):
         st.error("❌ Non-free models require your own API key. Please enter your own OpenRouter API key to use paid models.")
         model_allowed = False
     else:
@@ -329,7 +330,10 @@ try:
             df.insert(4, "PARG Number", parg_number_col)
 
             # Sort by "FP binding (uM)" column (ascending order, with NaN values last)
-            df = df.sort_values(by="FP binding (uM)", ascending=True, na_position='last')
+            # Create a temporary numeric column for sorting (handles string values like ">100")
+            df["_sort_key"] = pd.to_numeric(df["FP binding (uM)"], errors='coerce')
+            df = df.sort_values(by="_sort_key", ascending=True, na_position='last')
+            df = df.drop(columns=["_sort_key"])
 
             st.success(f"✅ Merged {len(df1)} rows from {sheet1_name} with {len(df2)} rows from {sheet2_name}")
     elif st.session_state.data_source_type == "single_sheet":
@@ -351,12 +355,144 @@ try:
     # Data summary
     st.subheader("Data Summary")
 
-    # Scatter plot for VEEV - AI Binding Score vs Chi2_ndof_RU2
-    x_col = "VEEV - AI Binding Score"
-    y_col = "Chi2_ndof_RU2"
-    if x_col in df.columns and y_col in df.columns:
-        # Filter out rows with missing values for the scatter plot
-        plot_df = df[[x_col, y_col]].dropna()
+    # Scatter plot based on data source type
+    if st.session_state.data_source_type == "veev_peitho_merge":
+        # Scatter plot for VEEV - AI Binding Score vs Chi2_ndof_RU2 (PEITHO merge)
+        x_col = "VEEV - AI Binding Score"
+        y_col = "KD_M"
+    elif st.session_state.data_source_type == "veev_parg_merge":
+        # Scatter plot for VEEV - AI Binding Score vs FP binding (uM) (PARG merge)
+        x_col = "VEEV - AI Binding Score"
+        y_col = "FP binding (uM)"
+    else:
+        x_col = None
+        y_col = None
+
+    if st.session_state.data_source_type == "veev_peitho_merge":
+        # Create correlation plots for VEEV PEITHO merge
+        # Filter data with good values: RMSE < 10 and Chi2 < 10
+        filtered_df = df.copy()
+        if "RMSE_RU" in filtered_df.columns:
+            filtered_df["RMSE_RU"] = pd.to_numeric(filtered_df["RMSE_RU"], errors='coerce')
+            filtered_df = filtered_df[filtered_df["RMSE_RU"] < 10]
+        if "Chi2_ndof_RU2" in filtered_df.columns:
+            filtered_df["Chi2_ndof_RU2"] = pd.to_numeric(filtered_df["Chi2_ndof_RU2"], errors='coerce')
+            filtered_df = filtered_df[filtered_df["Chi2_ndof_RU2"] < 10]
+
+        st.write(f"**Filtered data (RMSE < 10, Chi2 < 10):** {len(filtered_df)} rows")
+
+        # Define the correlation plots to create
+        correlation_plots = [
+            ("KD_M", "VEEV - AI Binding Score"),
+            ("kA[1/(M·s)]", "VEEV - AI Binding Score"),
+            ("kD[1/s]", "VEEV - AI Binding Score"),
+        ]
+
+        # Create three columns for plots
+        plot_cols = st.columns(3)
+
+        for i, (y_col, x_col) in enumerate(correlation_plots):
+            with plot_cols[i]:
+                if x_col in filtered_df.columns and y_col in filtered_df.columns:
+                    plot_df = filtered_df[[x_col, y_col]].copy()
+
+                    # Ensure both columns are numeric
+                    plot_df[x_col] = pd.to_numeric(plot_df[x_col], errors='coerce')
+                    plot_df[y_col] = pd.to_numeric(plot_df[y_col], errors='coerce')
+                    plot_df = plot_df.dropna()
+
+                    if len(plot_df) > 0:
+                        # Filter to positive y values only for log scale
+                        plot_df_log = plot_df[plot_df[y_col] > 0].copy()
+
+                        if len(plot_df_log) > 0:
+                            # Calculate correlation
+                            correlation = np.corrcoef(plot_df_log[x_col], plot_df_log[y_col])[0, 1]
+
+                            # Create scatter plot with log y-axis
+                            fig = px.scatter(
+                                plot_df_log,
+                                x=x_col,
+                                y=y_col,
+                                trendline="ols",
+                                trendline_options=dict(log_y=True),
+                                title=f"{y_col} vs AI Binding (r = {correlation:.3f})",
+                            )
+                            fig.update_layout(
+                                xaxis_title=x_col,
+                                yaxis_title=y_col,
+                                height=300,
+                                margin=dict(l=40, r=20, t=40, b=40),
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning(f"No positive y-values for {y_col} plot.")
+                    else:
+                        st.warning(f"No valid data for {y_col} plot.")
+                else:
+                    st.warning(f"Column {y_col} not found.")
+
+        # Second row of correlation plots: KD_M vs molecular properties
+        correlation_plots_2 = [
+            ("KD_M", "LogP"),
+            ("KD_M", "Hydrogen bonds donors"),
+            ("KD_M", "Hydrogen bonds acceptors"),
+        ]
+
+        # Create three columns for second row of plots
+        plot_cols_2 = st.columns(3)
+
+        for i, (y_col, x_col) in enumerate(correlation_plots_2):
+            with plot_cols_2[i]:
+                if x_col in filtered_df.columns and y_col in filtered_df.columns:
+                    plot_df = filtered_df[[x_col, y_col]].copy()
+
+                    # Ensure both columns are numeric
+                    plot_df[x_col] = pd.to_numeric(plot_df[x_col], errors='coerce')
+                    plot_df[y_col] = pd.to_numeric(plot_df[y_col], errors='coerce')
+                    plot_df = plot_df.dropna()
+
+                    if len(plot_df) > 0:
+                        # Filter to positive y values only for log scale
+                        plot_df_log = plot_df[plot_df[y_col] > 0].copy()
+
+                        if len(plot_df_log) > 0:
+                            # Calculate correlation
+                            correlation = np.corrcoef(plot_df_log[x_col], plot_df_log[y_col])[0, 1]
+
+                            # Create scatter plot with log y-axis
+                            fig = px.scatter(
+                                plot_df_log,
+                                x=x_col,
+                                y=y_col,
+                                trendline="ols",
+                                trendline_options=dict(log_y=True),
+                                title=f"KD_M vs {x_col} (r = {correlation:.3f})",
+                            )
+                            fig.update_layout(
+                                xaxis_title=x_col,
+                                yaxis_title=y_col,
+                                height=300,
+                                margin=dict(l=40, r=20, t=40, b=40),
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.warning(f"No positive y-values for {x_col} plot.")
+                    else:
+                        st.warning(f"No valid data for {x_col} plot.")
+                else:
+                    st.warning(f"Column {x_col} not found.")
+
+    elif x_col and y_col and x_col in df.columns and y_col in df.columns:
+        # Original scatter plot logic for other data sources
+        plot_df = df.where(df["Chi2_ndof_RU2"] < 9)
+        plot_df = plot_df.where(df["KD_M"] < 10e-6)
+        plot_df = plot_df[[x_col, y_col]].copy()
+
+        # Ensure both columns are numeric
+        plot_df[x_col] = pd.to_numeric(plot_df[x_col], errors='coerce')
+        plot_df[y_col] = pd.to_numeric(plot_df[y_col], errors='coerce')
+        plot_df = plot_df.dropna()
 
         if len(plot_df) > 0:
             # Filter to positive y values only for log scale
@@ -364,8 +500,8 @@ try:
 
             if len(plot_df_log) > 0:
                 # Calculate correlation with log-transformed y
-                log_y = np.log10(plot_df_log[y_col])
-                correlation = np.corrcoef(plot_df_log[x_col], log_y)[0, 1]
+                y = plot_df_log[y_col]
+                correlation = np.corrcoef(plot_df_log[x_col], y)[0, 1]
 
                 # Create scatter plot with log y-axis
                 fig = px.scatter(
@@ -378,8 +514,7 @@ try:
                 )
                 fig.update_layout(
                     xaxis_title=x_col,
-                    yaxis_title=f"log({y_col})",
-                    yaxis_type="log",
+                    yaxis_title=y_col,
                     height=400,
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -403,8 +538,57 @@ try:
 
     st.markdown("---")
 
-    def generate_ai_response(prompt, df, openrouter_api_key, model):
-        """Generate AI response for a given prompt"""
+    # Maximum number of recent messages to keep before summarizing older ones
+    MAX_RECENT_MESSAGES = 6  # Keep last 3 exchanges (6 messages: 3 user + 3 assistant)
+
+    def summarize_conversation(messages_to_summarize, openrouter_api_key, model):
+        """Summarize older conversation messages to reduce context size"""
+        if not messages_to_summarize:
+            return None
+
+        conversation_text = "\n".join([
+            f"{msg['role'].upper()}: {msg['content']}"
+            for msg in messages_to_summarize
+        ])
+
+        summary_prompt = (
+            "Summarize the following conversation concisely, preserving key information, "
+            "questions asked, and conclusions reached. Keep it brief but informative:\n\n"
+            f"{conversation_text}"
+        )
+
+        headers = {
+            "Authorization": f"Bearer {openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        data = {
+            "model": model_mapping[model],
+            "messages": [
+                {"role": "user", "content": summary_prompt}
+            ],
+        }
+
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=30,
+            )
+            if response.status_code == 200:
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+
+        return None
+
+    def generate_ai_response(prompt, df, openrouter_api_key, model, message_history):
+        """Generate AI response for a given prompt with conversation history"""
+
+        df = df[["Name", "Chi2_ndof_RU2", "VEEV - AI Binding Score", "KD_M"]].copy()
+
         # Prepare data context
         data_summary = f"""
 Dataset Information:
@@ -431,18 +615,66 @@ Data types:
             "Content-Type": "application/json",
         }
 
+        # Build messages list with conversation history
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt,
+            }
+        ]
+
+        # Get previous messages (excluding the current prompt which is the last message)
+        previous_messages = message_history[:-1]
+
+        # If conversation is too long, summarize older messages
+        if len(previous_messages) > MAX_RECENT_MESSAGES:
+            older_messages = previous_messages[:-MAX_RECENT_MESSAGES]
+            recent_messages = previous_messages[-MAX_RECENT_MESSAGES:]
+
+            # Check if we already have a summary in session state
+            if "conversation_summary" not in st.session_state:
+                st.session_state.conversation_summary = None
+
+            # Notify user that context is being compacted
+            st.info(f"📦 Compacting conversation history ({len(older_messages)} older messages being summarized)...")
+
+            # Summarize older messages
+            summary = summarize_conversation(older_messages, openrouter_api_key, model)
+            if summary:
+                st.session_state.conversation_summary = summary
+                # Add summary as context
+                messages.append({
+                    "role": "user",
+                    "content": f"[Previous conversation summary: {summary}]"
+                })
+                messages.append({
+                    "role": "assistant",
+                    "content": "I understand the context from our previous discussion. How can I help you further?"
+                })
+
+            # Add recent messages
+            for msg in recent_messages:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+        else:
+            # Add all previous messages
+            for msg in previous_messages:
+                messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+        # Add the current user prompt
+        messages.append({
+            "role": "user",
+            "content": prompt,
+        })
+
         data = {
             "model": model_mapping[model],
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ]
+            "messages": messages,
         }
 
         response = requests.post(
@@ -489,7 +721,7 @@ Data types:
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     try:
-                        generate_ai_response(prompt, df, openrouter_api_key, model)
+                        generate_ai_response(prompt, df, openrouter_api_key, model, st.session_state.messages)
                     except Exception as e:
                         error_msg = f"An error occurred: {str(e)}"
                         st.error(error_msg)
