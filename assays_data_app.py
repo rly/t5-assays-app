@@ -97,8 +97,8 @@ def get_pubchem_urls(smiles_list: list[str]) -> list[str]:
     return results
 
 model_mapping = {
-    "OpenAI GPT-OSS 20B (free)": "openai/gpt-oss-20b:free",
     "NVIDIA: Nemotron 3 Nano 30B A3B (free)": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "OpenAI GPT-OSS 20B (free)": "openai/gpt-oss-20b:free",
     "Gemini 2.5 Flash ($)": "google/gemini-2.5-flash",
     "GPT-5 Mini ($)": "openai/gpt-5-mini",
     "GPT-5 ($$)": "openai/gpt-5",
@@ -182,22 +182,43 @@ with st.sidebar:
     # Data filtering options (only show for VEEV PEITHO merge)
     if data_source_type == "VEEV MacroD PEITHO Merge":
         st.subheader("🔍 Data Filters")
+
+        # Initialize filter values in session state if not present
+        if "chi2_max" not in st.session_state:
+            st.session_state.chi2_max = 10.0
+        if "rmse_max" not in st.session_state:
+            st.session_state.rmse_max = 10.0
+
         chi2_max = st.number_input(
             "Chi2_ndof_RU2 <",
             min_value=0.0,
-            value=10.0,
+            value=st.session_state.chi2_max,
             step=1.0,
             help="Filter to include only rows where Chi2_ndof_RU2 is less than this value"
         )
         rmse_max = st.number_input(
             "RMSE_RU <",
             min_value=0.0,
-            value=10.0,
+            value=st.session_state.rmse_max,
             step=1.0,
             help="Filter to include only rows where RMSE_RU is less than this value"
         )
         st.session_state.chi2_max = chi2_max
         st.session_state.rmse_max = rmse_max
+
+        # Filter buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Clear Filters", use_container_width=True):
+                st.session_state.chi2_max = 1e9
+                st.session_state.rmse_max = 1e9
+                st.rerun()
+        with col2:
+            if st.button("Reset Defaults", use_container_width=True):
+                st.session_state.chi2_max = 10.0
+                st.session_state.rmse_max = 10.0
+                st.rerun()
+
         # Placeholder for filter status (will be updated after data loads)
         filter_status_placeholder = st.empty()
 
@@ -374,11 +395,21 @@ try:
     # Replace "新" in column names with "·s" (applies to all data sources)
     df.columns = df.columns.str.replace("新", "·s", regex=False)
 
+    # Write column names to file for reference
+    with open("column_names.txt", "w") as f:
+        for col in df.columns:
+            f.write(f"{col}\n")
+
     # Data View section
     st.subheader("Data View")
 
-    # Display dataframe
-    st.dataframe(df, height=500)
+    # Display dataframe with Name column frozen
+    st.dataframe(
+        df,
+        height=500,
+        hide_index=True,
+        column_config={"Name": st.column_config.Column(pinned=True)}
+    )
 
     # Data summary
     st.subheader("Data Summary")
@@ -609,10 +640,18 @@ try:
 
         return None
 
-    def generate_ai_response(prompt, df, openrouter_api_key, model, message_history):
+    def generate_ai_response(prompt, df, openrouter_api_key, model, message_history, chi2_max, rmse_max):
         """Generate AI response for a given prompt with conversation history"""
 
-        df = df[["Name", "Chi2_ndof_RU2", "VEEV - AI Binding Score", "KD_M"]].copy()
+        df = df[["Name", "Chi2_ndof_RU2", "RMSE_RU", "VEEV - AI Binding Score", "KD_M", "kA[1/(M·s)]", "kD[1/s]", "Structure", "Chemical formula", "Heavy atoms", "Rotatable bonds", "Hydrogen bonds donors", "Hydrogen bonds acceptors", "Molar refractivity", "Solubility"]].copy()
+
+        # Prepare filter info
+        filter_info = []
+        if chi2_max < 1e8:
+            filter_info.append(f"Chi2_ndof_RU2 < {chi2_max}")
+        if rmse_max < 1e8:
+            filter_info.append(f"RMSE_RU < {rmse_max}")
+        filter_str = ", ".join(filter_info) if filter_info else "None"
 
         # Prepare data context
         data_summary = f"""
@@ -620,6 +659,7 @@ Dataset Information:
 - Rows: {len(df)}
 - Columns: {len(df.columns)}
 - Column names: {', '.join(df.columns.tolist())}
+- Filters applied: {filter_str}
 
 All data:
 {df.to_string()}
@@ -713,7 +753,15 @@ Data types:
             result = response.json()
             assistant_response = result["choices"][0]["message"]["content"]
             st.markdown(assistant_response)
-            st.caption(f"_Model: {model}_")
+            # Show model and token usage
+            usage = result.get("usage", {})
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            completion_tokens = usage.get("completion_tokens", 0)
+            total_tokens = usage.get("total_tokens", 0)
+            if total_tokens > 0:
+                st.caption(f"_Model: {model} | Tokens: {prompt_tokens:,} in + {completion_tokens:,} out = {total_tokens:,} total_")
+            else:
+                st.caption(f"_Model: {model}_")
             st.session_state.messages.append({"role": "assistant", "content": assistant_response})
         else:
             error_msg = f"Error: {response.status_code} - {response.text}"
@@ -722,6 +770,15 @@ Data types:
 
     # AI Chat section at the bottom
     st.subheader("AI Chat")
+
+    # Show context size
+    ai_columns = ["Name", "Chi2_ndof_RU2", "RMSE_RU", "VEEV - AI Binding Score", "KD_M", "kA[1/(M·s)]", "kD[1/s]", "Structure", "Chemical formula", "Heavy atoms", "Rotatable bonds", "Hydrogen bonds donors", "Hydrogen bonds acceptors", "Molar refractivity", "Solubility"]
+    available_cols = [col for col in ai_columns if col in df.columns]
+    ai_df = df[available_cols].copy()
+    context_text = ai_df.to_string()
+    # Rough estimate: ~4 characters per token
+    estimated_tokens = len(context_text) // 4
+    st.caption(f"📊 Context: {len(ai_df)} rows × {len(available_cols)} cols (~{estimated_tokens:,} tokens)")
 
     # Chat interface
     if openrouter_api_key and model_allowed:
@@ -746,7 +803,9 @@ Data types:
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     try:
-                        generate_ai_response(prompt, df, openrouter_api_key, model, st.session_state.messages)
+                        chi2_max = st.session_state.get("chi2_max", 10.0)
+                        rmse_max = st.session_state.get("rmse_max", 10.0)
+                        generate_ai_response(prompt, df, openrouter_api_key, model, st.session_state.messages, chi2_max, rmse_max)
                     except Exception as e:
                         error_msg = f"An error occurred: {str(e)}"
                         st.error(error_msg)
