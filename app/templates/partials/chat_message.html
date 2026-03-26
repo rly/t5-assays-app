@@ -1,0 +1,10 @@
+<div class="chat-msg chat-{{ role }}">
+    <div class="chat-msg-header">{{ 'You' if role == 'user' else 'AI' }}</div>
+    <div class="chat-msg-body">
+        {% if role == 'assistant' %}
+        <div class="markdown-content">{{ content }}</div>
+        {% else %}
+        {{ content }}
+        {% endif %}
+    </div>
+</div>

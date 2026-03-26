@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<main class="container login-container">
+    <article class="login-card">
+        <div class="login-icon">T5</div>
+        <h2 class="login-title">Assays Data Assistant</h2>
+        <p class="login-subtitle">Sign in to access assay data and <nobr>AI-powered</nobr> analysis</p>
+        {% if error %}
+        <p class="error-message">{{ error }}</p>
+        {% endif %}
+        <form method="post" action="/login">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Password" required>
+            <button type="submit">Sign In</button>
+        </form>
+    </article>
+</main>
+{% endblock %}

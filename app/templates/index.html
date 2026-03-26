@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.1.1/dist/ag-grid-community.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-3.4.0.min.js" charset="utf-8"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% endblock %}
+
+{% block body %}
+<nav class="top-nav">
+    <ul>
+        <li><strong>T5 Assays Data Assistant</strong></li>
+    </ul>
+    <ul>
+        <li><span class="user-email">{{ user.email }}</span></li>
+        <li>
+            <form method="post" action="/logout" style="margin:0">
+                <button type="submit" class="outline secondary btn-sm">Logout</button>
+            </form>
+        </li>
+    </ul>
+</nav>
+
+<div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+        {% include "partials/sidebar.html" %}
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Data Table -->
+        <section id="data-section">
+            <div class="section-header">
+                <h3>Data View</h3>
+                <span id="row-count" class="badge"></span>
+            </div>
+            <div id="data-grid" style="height: 500px; width: 100%;"></div>
+        </section>
+
+        <!-- Plots -->
+        <section id="plots-section">
+            <h3>Data Summary</h3>
+            <div id="plots-container">
+                <p aria-busy="true">Loading plots...</p>
+            </div>
+        </section>
+
+        <!-- Chat -->
+        <section id="chat-section">
+            <h3>AI Chat</h3>
+            <div id="chat-container">
+                {% include "partials/chat.html" %}
+            </div>
+        </section>
+    </main>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Pass initial data config to JS
+    window.APP_CONFIG = {
+        dataSource: "{{ prefs.data_source_type }}",
+        chi2Max: {{ prefs.chi2_max }},
+        rmseMax: {{ prefs.rmse_max }},
+    };
+</script>
+<script src="/static/js/app.js"></script>
+{% endblock %}

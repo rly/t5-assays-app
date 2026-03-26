@@ -1,0 +1,89 @@
+<div class="chat-disclaimer">
+    AI responses are experimental and may contain errors. Verify important findings against the source data.
+</div>
+
+<div class="chat-suggestions">
+    {% if prefs.data_source_type == 'veev_peitho_merge' %}
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Find the top 10 binding candidates based on both AI binding score and experimental KD_M."}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Find top binding candidates
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Compare the AI binding predictions (VEEV - AI Binding Score) against the experimental SPR results (KD_M). Where do they agree and disagree?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        AI predictions vs experimental
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Which compounds have good Chi2 and RMSE values AND strong binding? Rank the most promising therapeutic candidates considering drug-likeness."}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Best therapeutic candidates
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Summarize the overall dataset. How many compounds show strong binding? What are the key patterns?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Summarize results
+    </button>
+    {% elif prefs.data_source_type == 'veev_parg_merge' %}
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Find the top 10 binding candidates based on both AI binding score and fluorescence polarization."}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Find top binding candidates
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Compare AI binding predictions against fluorescence polarization results. Where do the assays agree or disagree?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Compare assay results
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Summarize the overall dataset. How many compounds show strong binding? What are the key patterns?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Summarize results
+    </button>
+    {% else %}
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Summarize this dataset. What are the key columns, patterns, and notable findings?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Summarize results
+    </button>
+    {% endif %}
+</div>
+
+<div id="chat-messages">
+    {% if not messages %}
+    <div class="chat-empty-state">
+        Ask a question about the data or click a suggestion above to get started.
+    </div>
+    {% endif %}
+    {% for msg in messages %}
+    <div class="chat-msg chat-{{ msg.role }}">
+        <div class="chat-msg-header">
+            {% if msg.role == 'user' %}You{% else %}{{ model_label }}{% if msg.tokens_used %} &middot; <span class="chat-usage">{{ "{:,}".format(msg.tokens_used) }} tokens</span>{% endif %}{% endif %}
+        </div>
+        <div class="chat-msg-body">
+            {% if msg.role == 'assistant' %}
+            <div class="markdown-content">{{ msg.content }}</div>
+            {% else %}
+            {{ msg.content }}
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<form id="chat-form" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+      hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+    <div class="chat-input-row">
+        <input type="text" id="chat-input" name="message" placeholder="Ask a question about the data..."
+               autocomplete="off" required>
+        <button type="submit" id="chat-submit-btn">Send</button>
+    </div>
+</form>
+
+<div class="chat-footer">
+    <small id="session-cost" class="chat-footer-stats">{% if conv_tokens %}Conversation: ~{{ conv_tokens }} tokens{% if conv_cost %}, ~${{ conv_cost }}{% endif %}{% endif %}</small>
+    <button class="outline secondary btn-sm"
+            hx-post="/chat/clear" hx-target="#chat-messages" hx-swap="innerHTML">
+        Clear Chat
+    </button>
+</div>
