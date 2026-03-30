@@ -19,12 +19,12 @@
 
 <div class="chat-suggestions">
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Which compounds show the tightest binding (lowest KD_M) with good data quality (Chi2 < 10, RMSE < 10)? Rank the top 10."}'
+            hx-vals='{"message": "Which compounds show the strongest binding in each provided dataset? Use the most relevant binding metric for each assay type (e.g., KD_M for SPR, FP binding for fluorescence polarization, AI Binding Score for docking). Rank the top 10 from each dataset with good data quality."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
         Top binders
     </button>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Do the AI docking predictions (VEEV - AI Binding Score) agree with the experimental SPR results (KD_M)? Which compounds does the AI predict as strong binders that SPR confirms, and which does it get wrong?"}'
+            hx-vals='{"message": "Do the AI docking predictions agree with the experimental assay results? For each dataset that has both AI binding scores and experimental measurements, compare them. Which compounds does the AI predict as strong binders that experiments confirm, and which does it get wrong?"}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
         AI vs experiment
     </button>

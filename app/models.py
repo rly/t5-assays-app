@@ -26,7 +26,7 @@ class UserPreference(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     viewing_dataset_key = Column(String, nullable=True)  # currently viewed dataset
-    selected_model = Column(String, default="nvidia/nemotron-3-super-120b-a12b:free")
+    selected_model = Column(String, default="google/gemini-3.1-flash-lite-preview")
     openrouter_api_key_encrypted = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
