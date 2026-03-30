@@ -1,13 +1,15 @@
 """JSON API endpoints for data (used by AG Grid) and column metadata."""
+import json
 import math
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
-from app.models import User
-from app.services.merge_service import load_data
+from app.models import User, DatasetSelection
+from app.services.merge_service import load_dataset
 from app.services.filter_service import apply_filters
 
 router = APIRouter(prefix="/api")
@@ -17,24 +19,25 @@ router = APIRouter(prefix="/api")
 async def get_data(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    sheet_id: str = Query(None),
+    dataset_key: str = Query(...),
 ):
-    prefs = user.preferences
-    if not prefs:
-        return JSONResponse({"columns": [], "rows": []})
-
+    """Return dataset as JSON for AG Grid. Applies per-user filters."""
     try:
-        df = load_data(prefs.data_source_type, sheet_id)
+        df = load_dataset(dataset_key)
     except Exception as e:
         return JSONResponse({"columns": [], "rows": [], "error": str(e)})
 
-    # Apply filters for PEITHO merge
-    if prefs.data_source_type == "veev_peitho_merge":
-        df = apply_filters(df, prefs.chi2_max, prefs.rmse_max)
+    # Apply per-user filters
+    sel = db.query(DatasetSelection).filter(
+        DatasetSelection.user_id == user.id,
+        DatasetSelection.dataset_key == dataset_key,
+    ).first()
+    if sel and sel.filters_json:
+        filters = json.loads(sel.filters_json)
+        if filters:
+            df = apply_filters(df, filters)
 
     columns = df.columns.tolist()
-
-    # Convert to JSON-safe records
     rows = []
     for _, row in df.iterrows():
         record = {}
@@ -47,13 +50,3 @@ async def get_data(
         rows.append(record)
 
     return JSONResponse({"columns": columns, "rows": rows})
-
-
-@router.get("/columns")
-async def get_columns(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    prefs = user.preferences
-    if not prefs:
-        return JSONResponse({"columns": []})
-
-    df = load_data(prefs.data_source_type)
-    return JSONResponse({"columns": df.columns.tolist()})

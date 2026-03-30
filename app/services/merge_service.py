@@ -1,8 +1,16 @@
+"""Data loading service: loads single sheets and pre-configured merged datasets.
+
+Uses dataset_config.py for merge definitions and transform functions.
+Results are cached in memory with a 5-minute TTL.
+"""
 import time
+
 import pandas as pd
+
+from app.dataset_config import MERGE_CONFIGS, TRANSFORM_REGISTRY
 from app.services.sheets_service import get_sheets_from_folder, read_sheet
 
-# In-memory cache: {data_source_key: (df, timestamp)}
+# In-memory cache: {key: (df, timestamp)}
 _cache: dict[str, tuple[pd.DataFrame, float]] = {}
 CACHE_TTL = 300  # 5 minutes
 
@@ -23,117 +31,111 @@ def clear_cache():
     _cache.clear()
 
 
-def load_data(data_source_type: str, sheet_id: str | None = None) -> pd.DataFrame:
-    """Load and return a DataFrame based on the data source type."""
-    cache_key = f"{data_source_type}:{sheet_id or ''}"
-    cached = _get_cached(cache_key)
+def load_dataset(dataset_key: str) -> pd.DataFrame:
+    """Load a dataset by key. Handles both merge configs and single sheets."""
+    cached = _get_cached(dataset_key)
     if cached is not None:
         return cached
 
-    if data_source_type == "veev_peitho_merge":
-        df = _load_peitho_merge()
-    elif data_source_type == "veev_parg_merge":
-        df = _load_parg_merge()
-    elif data_source_type == "single_sheet" and sheet_id:
-        df = read_sheet(sheet_id)
+    if dataset_key in MERGE_CONFIGS:
+        df = _load_merge(dataset_key)
     else:
-        df = pd.DataFrame()
+        # Treat as a single sheet — key is the sheet name
+        sheets = get_sheets_from_folder()
+        if dataset_key in sheets:
+            df = read_sheet(sheets[dataset_key]["id"])
+        else:
+            raise ValueError(f"Dataset not found: {dataset_key}")
 
-    # Normalize column names
+    # Normalize column names (replace Chinese character with ·s)
     df.columns = df.columns.str.replace("\u65b0", "\u00b7s", regex=False)
 
-    _set_cache(cache_key, df)
+    _set_cache(dataset_key, df)
     return df
 
 
-def _load_peitho_merge() -> pd.DataFrame:
+def _load_merge(config_key: str) -> pd.DataFrame:
+    """Load and merge sheets according to a merge config."""
+    config = MERGE_CONFIGS[config_key]
     sheets = get_sheets_from_folder()
+    join = config["join"]
 
-    sheet1_name = "PIETHOS_AI-docking_V2_F-converted"
-    sheet2_name = "VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025"
+    # Load each sheet
+    dfs = {}
+    for sheet_def in config["sheets"]:
+        name = sheet_def["name"]
+        alias = sheet_def["alias"]
+        if name not in sheets:
+            raise ValueError(f"Sheet '{name}' not found in Google Drive folder")
+        dfs[alias] = read_sheet(sheets[name]["id"])
 
-    if sheet1_name not in sheets or sheet2_name not in sheets:
-        raise ValueError(f"Required sheets not found: {sheet1_name}, {sheet2_name}")
+    # Apply pre-merge transforms
+    for alias, transform_names in config.get("pre_merge_transforms", {}).items():
+        for t_name in transform_names:
+            if t_name in TRANSFORM_REGISTRY:
+                dfs[alias] = TRANSFORM_REGISTRY[t_name](dfs[alias])
 
-    df1 = read_sheet(sheets[sheet1_name]["id"])
-    df2 = read_sheet(sheets[sheet2_name]["id"])
+    # Merge (assumes exactly 2 sheets)
+    aliases = [s["alias"] for s in config["sheets"]]
+    df = pd.merge(
+        dfs[aliases[0]], dfs[aliases[1]],
+        left_on=join["left_on"], right_on=join["right_on"],
+        how=join["how"], suffixes=join["suffixes"],
+    )
 
-    df1 = df1.drop_duplicates()
-
-    df = pd.merge(df1, df2, left_on="Name", right_on="IDNUMBER", how="outer", suffixes=("_AI_Bind", "_SPR"))
-
-    # Rearrange columns
-    if "Chi2_ndof_RU2" in df.columns:
-        col = df.pop("Chi2_ndof_RU2")
-        df.insert(1, "Chi2_ndof_RU2", col)
-
-    if "RMSE_RU" in df.columns:
-        col = df.pop("RMSE_RU")
-        df.insert(2, "RMSE_RU", col)
-
-    if "VEEV - Binding Score" in df.columns:
-        col = df.pop("VEEV - Binding Score")
-        df.insert(3, "VEEV - AI Binding Score", col)
-
-    # Move KA/KD columns
-    ka_kd_cols = [c for c in df.columns if c.startswith(("kA", "kD", "KA", "KD"))]
-    insert_pos = 4
-    for c in ka_kd_cols:
-        col_data = df.pop(c)
-        df.insert(insert_pos, c, col_data)
-        insert_pos += 1
-
-    if "IDNUMBER" in df.columns:
-        col = df.pop("IDNUMBER")
-        df.insert(insert_pos, "IDNUMBER", col)
-
-    df = df.sort_values(by="Chi2_ndof_RU2", ascending=True, na_position="last")
-    return df
-
-
-def _load_parg_merge() -> pd.DataFrame:
-    sheets = get_sheets_from_folder()
-
-    sheet1_name = "VEEV_MacroD_PARG_AI_Bind_09082025"
-    sheet2_name = "VEEV_MacroD_PARG_Fluor_Pol_07292025"
-
-    if sheet1_name not in sheets or sheet2_name not in sheets:
-        raise ValueError(f"Required sheets not found: {sheet1_name}, {sheet2_name}")
-
-    df1 = read_sheet(sheets[sheet1_name]["id"])
-    df2 = read_sheet(sheets[sheet2_name]["id"])
-
-    df1 = df1.drop_duplicates()
-
-    # Transform PARG names: "PARG 1" -> "PARG001"
-    if "Name" in df1.columns:
-        df1["Name"] = df1["Name"].str.replace(
-            r"PARG (\d+)", lambda m: f"PARG{int(m.group(1)):03d}", regex=True
-        )
-
-    # Rename binding score
-    df1.rename(columns={"VEEV - Binding Score": "VEEV - AI Binding Score"}, inplace=True)
-
-    # Handle duplicate PARG Number columns
-    if "PARG Number.1" in df2.columns:
-        df2.rename(columns={"PARG Number.1": "PARG Number FP"}, inplace=True)
-
-    df = pd.merge(df1, df2, left_on="Name", right_on="PARG Number FP", how="outer", suffixes=("_AI_Bind", "_FP"))
-
-    # Rearrange columns
-    if "FP binding (uM)" in df.columns:
-        col = df.pop("FP binding (uM)")
-        df.insert(1, "FP binding (uM)", col)
-
-    if "PARG Number FP" in df.columns and "PARG Number" in df.columns:
-        col_fp = df.pop("PARG Number FP")
-        col_parg = df.pop("PARG Number")
-        df.insert(3, "PARG Number FP", col_fp)
-        df.insert(4, "PARG Number", col_parg)
-
-    # Sort by FP binding with numeric handling
-    df["_sort_key"] = pd.to_numeric(df.get("FP binding (uM)"), errors="coerce")
-    df = df.sort_values(by="_sort_key", ascending=True, na_position="last")
-    df = df.drop(columns=["_sort_key"])
+    # Apply post-merge transform
+    post_transform = config.get("post_merge_transform")
+    if post_transform and post_transform in TRANSFORM_REGISTRY:
+        df = TRANSFORM_REGISTRY[post_transform](df)
 
     return df
+
+
+def get_all_datasets() -> list[dict]:
+    """Return metadata for all available datasets (merges + single sheets).
+
+    Returns list of dicts with keys: key, display_name, type, description, default_filters.
+    """
+    datasets = []
+
+    # Pre-configured merges first
+    for key, config in MERGE_CONFIGS.items():
+        datasets.append({
+            "key": key,
+            "display_name": config["display_name"],
+            "type": "merge",
+            "description": config.get("description", ""),
+            "default_filters": config.get("default_filters", {}),
+        })
+
+    # Single sheets from Google Drive
+    try:
+        sheets = get_sheets_from_folder()
+        for name, info in sheets.items():
+            # Skip sheets that are part of a merge config (they're already represented)
+            merge_sheet_names = set()
+            for config in MERGE_CONFIGS.values():
+                for s in config["sheets"]:
+                    merge_sheet_names.add(s["name"])
+
+            datasets.append({
+                "key": name,
+                "display_name": name,
+                "type": "merge-source" if name in merge_sheet_names else "sheet",
+                "description": "",
+                "default_filters": _infer_default_filters(name),
+            })
+    except Exception:
+        pass
+
+    return datasets
+
+
+def _infer_default_filters(sheet_name: str) -> dict:
+    """Infer default filters based on sheet naming conventions.
+
+    Sheets with SPR data typically have Chi2_ndof_RU2 and RMSE_RU columns.
+    """
+    if "_SPR_" in sheet_name:
+        return {"Chi2_ndof_RU2": 10.0, "RMSE_RU": 10.0}
+    return {}

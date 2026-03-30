@@ -4,6 +4,7 @@
 <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@33.1.1/dist/ag-grid-community.min.js"></script>
 <script src="https://cdn.plot.ly/plotly-3.4.0.min.js" charset="utf-8"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://unpkg.com/smiles-drawer@2.2.1/dist/smiles-drawer.min.js"></script>
 {% endblock %}
 
 {% block body %}
@@ -21,50 +22,65 @@
     </ul>
 </nav>
 
-<div class="app-layout">
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-        {% include "partials/sidebar.html" %}
-    </aside>
+<main class="main-content">
+    <!-- Dataset Selector -->
+    <section id="dataset-selector-section">
+        <div class="section-header">
+            <h3>Datasets</h3>
+            <span id="ai-dataset-count" class="ai-dataset-badge"
+                  title="{{ ai_dataset_names }}">
+                {{ ai_dataset_count }} dataset{{ 's' if ai_dataset_count != 1 else '' }} provided to AI
+            </span>
+        </div>
+        <div id="dataset-selector">
+            {% include "partials/dataset_selector.html" %}
+        </div>
+    </section>
 
-    <!-- Main Content -->
-    <main class="main-content">
-        <!-- Data Table -->
-        <section id="data-section">
-            <div class="section-header">
-                <h3>Data View</h3>
-                <span id="row-count" class="badge"></span>
-            </div>
-            <div id="data-grid" style="height: 500px; width: 100%;"></div>
-        </section>
+    <!-- Data View (shown when a dataset is being viewed) -->
+    <section id="data-section">
+        {% if viewing_key %}
+        <div class="section-header">
+            <h3>{{ viewing_display_name }}</h3>
+            <span id="row-count" class="badge"></span>
+        </div>
+        <div id="data-grid" style="height: 500px; width: 100%;"></div>
+        {% else %}
+        <p class="empty-state">Select a dataset above and click "View" to see the data table.</p>
+        {% endif %}
+    </section>
 
-        <!-- Plots -->
-        <section id="plots-section">
-            <h3>Data Summary</h3>
-            <div id="plots-container">
-                <p aria-busy="true">Loading plots...</p>
-            </div>
-        </section>
+    <!-- Plots -->
+    {% if viewing_key %}
+    <section id="plots-section">
+        <h3>Data Summary</h3>
+        <div id="plots-container">
+            <p aria-busy="true">Loading plots...</p>
+        </div>
+    </section>
+    {% endif %}
 
-        <!-- Chat -->
-        <section id="chat-section">
-            <h3>AI Chat</h3>
-            <div id="chat-container">
-                {% include "partials/chat.html" %}
-            </div>
-        </section>
-    </main>
+    <!-- Chat -->
+    <section id="chat-section">
+        <h3>AI Chat</h3>
+        {% include "partials/chat.html" %}
+    </section>
+</main>
+
+<!-- Structure viewer popup -->
+<div id="structure-popup" class="structure-popup" style="display:none;">
+    <div class="structure-popup-header">
+        <span id="structure-popup-title"></span>
+        <button onclick="hideStructure()" class="structure-popup-close">&times;</button>
+    </div>
+    <canvas id="structure-canvas" width="400" height="300"></canvas>
 </div>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // Pass initial data config to JS
     window.APP_CONFIG = {
-        dataSource: "{{ prefs.data_source_type }}",
-        chi2Max: {{ prefs.chi2_max }},
-        rmseMax: {{ prefs.rmse_max }},
+        viewingDataset: "{{ viewing_key or '' }}",
     };
 </script>
 <script src="/static/js/app.js"></script>

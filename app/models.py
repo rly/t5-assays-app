@@ -1,5 +1,7 @@
+"""SQLAlchemy ORM models for users, preferences, dataset selections, and chat."""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey
+
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -14,6 +16,7 @@ class User(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     preferences = relationship("UserPreference", back_populates="user", uselist=False)
+    dataset_selections = relationship("DatasetSelection", back_populates="user")
     conversations = relationship("Conversation", back_populates="user")
 
 
@@ -22,9 +25,7 @@ class UserPreference(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
-    data_source_type = Column(String, default="veev_peitho_merge")
-    chi2_max = Column(Float, default=10.0)
-    rmse_max = Column(Float, default=10.0)
+    viewing_dataset_key = Column(String, nullable=True)  # currently viewed dataset
     selected_model = Column(String, default="nvidia/nemotron-3-super-120b-a12b:free")
     openrouter_api_key_encrypted = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -32,12 +33,28 @@ class UserPreference(Base):
     user = relationship("User", back_populates="preferences")
 
 
-class Conversation(Base):
-    __tablename__ = "conversations"
+class DatasetSelection(Base):
+    """Tracks each user's relationship to a dataset: filters and AI access."""
+    __tablename__ = "dataset_selections"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    data_source_type = Column(String, nullable=False)
+    dataset_key = Column(String, nullable=False)  # merge config key or sheet name
+    dataset_type = Column(String, nullable=False)  # "merge", "sheet", "merge-source"
+    display_name = Column(String, nullable=False)
+    provided_to_ai = Column(Boolean, default=False)
+    filters_json = Column(Text, default="{}")  # JSON: {"Chi2_ndof_RU2": 10.0}
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="dataset_selections")
+
+
+class Conversation(Base):
+    """One conversation per user (not per dataset)."""
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
     summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

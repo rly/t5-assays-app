@@ -66,13 +66,11 @@ def is_model_allowed(model_id: str, user_key: str | None) -> bool:
     return bool(user_key)
 
 
-def get_or_create_conversation(db: Session, user_id: int, data_source_type: str) -> Conversation:
-    conv = db.query(Conversation).filter(
-        Conversation.user_id == user_id,
-        Conversation.data_source_type == data_source_type,
-    ).first()
+def get_or_create_conversation(db: Session, user_id: int) -> Conversation:
+    """Get or create the single conversation for a user."""
+    conv = db.query(Conversation).filter(Conversation.user_id == user_id).first()
     if not conv:
-        conv = Conversation(user_id=user_id, data_source_type=data_source_type)
+        conv = Conversation(user_id=user_id)
         db.add(conv)
         db.commit()
         db.refresh(conv)
@@ -135,24 +133,13 @@ def cleanup_response(text: str) -> str:
 @dataclass
 class ChatDeps:
     """Dependencies passed to the agent tools at runtime."""
-    df: pd.DataFrame
+    datasets: dict[str, pd.DataFrame]  # {name: DataFrame}
 
 
-def build_system_prompt(df: pd.DataFrame, data_source_type: str, chi2_max: float = 10.0, rmse_max: float = 10.0) -> str:
-    """Build the system prompt with data summary (not raw data)."""
-    import numpy as np
-
-    filters = []
-    if chi2_max < 1e8:
-        filters.append(f"Chi2_ndof_RU2 < {chi2_max}")
-    if rmse_max < 1e8:
-        filters.append(f"RMSE_RU < {rmse_max}")
-    filter_str = ", ".join(filters) if filters else "None"
-
-    # Build column descriptions with types and basic stats
+def _describe_dataset(name: str, df: pd.DataFrame) -> str:
+    """Generate column summary for a single dataset."""
     col_descriptions = []
     for col in df.columns:
-        dtype = str(df[col].dtype)
         non_null = int(df[col].notna().sum())
         try:
             numeric = pd.to_numeric(df[col], errors="coerce")
@@ -166,13 +153,31 @@ def build_system_prompt(df: pd.DataFrame, data_source_type: str, chi2_max: float
             desc = f"  - {col} (text, {non_null} non-null, {n_unique} unique, e.g. {sample})"
         col_descriptions.append(desc)
 
-    data_summary = (
-        f"Dataset: {data_source_type}\n"
-        f"- Rows: {len(df)}\n"
-        f"- Columns: {len(df.columns)}\n"
-        f"- Filters applied: {filter_str}\n\n"
-        f"Column details:\n" + "\n".join(col_descriptions)
+    var_name = name.replace(" ", "_").replace("-", "_")
+    return (
+        f'Dataset "{name}" (variable: {var_name}, {len(df)} rows x {len(df.columns)} cols):\n'
+        + "\n".join(col_descriptions)
     )
+
+
+def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
+    """Build the system prompt with summaries for all provided datasets."""
+    dataset_descriptions = []
+    for name, df in datasets.items():
+        dataset_descriptions.append(_describe_dataset(name, df))
+
+    data_context = "\n\n".join(dataset_descriptions)
+
+    # Build variable list for the prompt
+    var_list = []
+    for name in datasets:
+        var_name = name.replace(" ", "_").replace("-", "_")
+        var_list.append(f'  - {var_name} (or datasets["{name}"])')
+
+    if len(datasets) == 1:
+        access_note = "For convenience, the single dataset is also available as `df`.\n"
+    else:
+        access_note = ""
 
     return (
         "You are a helpful data analyst assistant for alphaviral macrodomain assay data. "
@@ -183,13 +188,15 @@ def build_system_prompt(df: pd.DataFrame, data_source_type: str, chi2_max: float
         "- Keep explanations concise and focused on actionable insights.\n"
         "- When showing data or results, use fenced code blocks: ```\\n...\\n```\n\n"
         "COMPUTATION:\n"
-        "- You have a `run_python` tool that executes Python code with the full dataset loaded as `df` (a pandas DataFrame).\n"
+        "- You have a `run_python` tool that executes Python code.\n"
+        f"- Available datasets ({len(datasets)}):\n" + "\n".join(var_list) + "\n"
+        f"{access_note}"
         "- ALWAYS use the run_python tool to access, query, or analyze data. You can see column summaries below but NOT the raw data.\n"
-        "- Use print() in your code to produce output. The printed output is returned to you.\n"
+        "- Use print() in your code to produce output.\n"
         "- You can call the tool multiple times to do multi-step analysis.\n"
         "- NEVER guess, fabricate, or estimate data values. Always compute them using run_python.\n"
         "- If your code produces an error, fix it and try again.\n\n"
-        f"Current data context:\n{data_summary}\n\n"
+        f"Data context:\n{data_context}\n\n"
         "Answer questions accurately. Highlight key findings and actionable insights."
     )
 
@@ -209,10 +216,11 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
 
     @agent.tool
     def run_python(ctx: RunContext[ChatDeps], code: str) -> str:
-        """Execute Python code against the dataset. The variable `df` is a pre-loaded pandas DataFrame.
-        Use print() to output results. Only pandas, numpy, math, statistics, re, datetime are available.
-        Returns the printed output or an error message."""
-        result = execute_code(code, ctx.deps.df)
+        """Execute Python code against the provided datasets.
+        Available variables: each dataset as a named variable (e.g., VEEV_PEITHO_SPR), plus a 'datasets' dict.
+        If only one dataset is provided, 'df' is also available.
+        Use print() to output results. Only pandas, numpy, math, statistics, re, datetime are available."""
+        result = execute_code(code, ctx.deps.datasets)
         if result["success"]:
             output = result.get("output", "").strip()
             return output if output else "(no output — make sure to use print())"
@@ -227,10 +235,10 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
 async def run_agent_chat(
     api_key: str, model_id: str, system_prompt: str,
     conversation_messages: list[dict], user_message: str,
-    df: pd.DataFrame,
+    datasets: dict[str, pd.DataFrame],
     conversation_summary: str | None = None,
 ) -> dict:
-    """Run the agent with tool calling. Returns {"content": str, "usage": dict}."""
+    """Run the agent with tool calling. Returns {"content": str, "usage": dict, "tool_steps": list, "elapsed": float}."""
     await _ensure_pricing_loaded()
 
     agent = create_agent(api_key, model_id)
@@ -263,7 +271,7 @@ async def run_agent_chat(
 
     result = await agent.run(
         user_message,
-        deps=ChatDeps(df=df),
+        deps=ChatDeps(datasets=datasets),
         instructions=full_system_prompt,
     )
 
@@ -310,26 +318,12 @@ async def run_agent_chat(
 
 
 
-def generate_summary_prompt(data_source_type: str) -> str:
-    """Generate the summarize quick-action prompt."""
-    if data_source_type == "veev_peitho_merge":
-        return (
-            "These are the results from PIETHOS_AI-docking_V2_F-converted and "
-            "VEEV_MacroD_PEITHO_SPR_03132025_04302025_05072025 merged, which represent "
-            "the results of an AI Binding Assay and SPR Assay for the PEITHO compound "
-            "library on the VEEV MacroDomain. Summarize these results, and in particular, "
-            'note contrasts between the AI assay results (VEEV - AI Binding Score) and '
-            'SPR assay results (Chi2_ndof_RU2, KD_M).'
-        )
-    elif data_source_type == "veev_parg_merge":
-        return (
-            "These are the results from VEEV_MacroD_PARG_AI_Bind_09082025 and "
-            "VEEV_MacroD_PARG_Fluor_Pol_07292025 merged. Summarize these results, "
-            "and in particular, note contrasts between the AI binding predictions "
-            "and the Fluorescence Polarization assay results."
-        )
-    else:
-        return "Summarize these results, highlighting key findings and any notable patterns."
+def generate_summary_prompt(dataset_names: list[str]) -> str:
+    """Generate a summary prompt based on the provided dataset names."""
+    if not dataset_names:
+        return "No datasets are provided. Please select datasets to provide to the AI first."
+    names = ", ".join(dataset_names)
+    return f"Summarize the provided datasets ({names}). Highlight key findings, patterns, and contrasts between different assay results."
 
 
 async def summarize_conversation(messages: list[dict], api_key: str, model_id: str) -> str | None:

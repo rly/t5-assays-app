@@ -1,8 +1,10 @@
 // AG Grid instance
 let gridApi = null;
 
-// Load data and initialize grid
-function loadData() {
+// Load data for a specific dataset and initialize grid
+function loadData(datasetKey) {
+    if (!datasetKey) return;
+
     const gridDiv = document.getElementById("data-grid");
     const rowCount = document.getElementById("row-count");
     if (gridDiv) {
@@ -10,20 +12,41 @@ function loadData() {
     }
     if (rowCount) rowCount.textContent = "";
 
-    fetch("/api/data")
+    fetch(`/api/data?dataset_key=${encodeURIComponent(datasetKey)}`)
         .then(r => r.json())
         .then(data => {
             if (!gridDiv) return;
 
-            const columnDefs = data.columns.map(col => ({
-                field: col,
-                sortable: true,
-                filter: true,
-                resizable: true,
-                pinned: col === "Name" ? "left" : null,
-                width: 120,
-                tooltipField: col,
-            }));
+            const columnDefs = data.columns.map(col => {
+                const def = {
+                    field: col,
+                    sortable: true,
+                    filter: true,
+                    resizable: true,
+                    pinned: col === "Name" ? "left" : null,
+                    width: 120,
+                    tooltipField: col,
+                    headerTooltip: col,
+                };
+                // Make Structure column clickable to show 2D molecule
+                if (col === "Structure") {
+                    def.cellRenderer = function(params) {
+                        if (!params.value) return "";
+                        const link = document.createElement("a");
+                        link.href = "#";
+                        link.textContent = params.value.substring(0, 20) + (params.value.length > 20 ? "..." : "");
+                        link.title = "Click to view structure";
+                        link.style.color = "var(--pico-primary)";
+                        link.style.cursor = "pointer";
+                        link.onclick = function(e) {
+                            e.preventDefault();
+                            showStructure(params.value, params.data.Name || "");
+                        };
+                        return link;
+                    };
+                }
+                return def;
+            });
 
             const myTheme = agGrid.themeQuartz.withParams({
                 fontSize: 12,
@@ -51,63 +74,40 @@ function loadData() {
                 enableCellTextSelection: true,
             };
 
-            // Clear existing grid
             gridDiv.innerHTML = "";
             gridApi = agGrid.createGrid(gridDiv, gridOptions);
 
-            // Update row count
-            const rowCount = document.getElementById("row-count");
             if (rowCount) {
                 rowCount.textContent = `${data.rows.length} rows x ${data.columns.length} cols`;
             }
-
         })
         .catch(err => {
             console.error("Error loading data:", err);
-            const gridDiv = document.getElementById("data-grid");
-            if (gridDiv) gridDiv.innerHTML = "<p>Error loading data. Check console.</p>";
+            if (gridDiv) gridDiv.innerHTML = "<p>Error loading data.</p>";
         });
 }
 
-function updateContextSize(rows, cols) {
-    const el = document.getElementById("context-size");
-    if (el) {
-        const estimatedTokens = Math.round(rows * cols * 10);
-        el.textContent = `Context: ${rows} rows x ${cols} cols (~${estimatedTokens.toLocaleString()} tokens)`;
-    }
-}
-
-// Reload plots (wait for Plotly to be available)
-function loadPlots() {
+// Load plots for a specific dataset (wait for Plotly)
+function loadPlots(datasetKey) {
+    if (!datasetKey) return;
     if (typeof Plotly === "undefined") {
-        setTimeout(loadPlots, 200);
+        setTimeout(() => loadPlots(datasetKey), 200);
         return;
     }
-    htmx.ajax("GET", "/plots", {target: "#plots-container", swap: "innerHTML"});
-}
-
-// Full reload of data + plots
-function reloadAll() {
-    loadData();
-    loadPlots();
-}
-
-// Listen for HTMX events from sidebar actions that should trigger reload
-document.addEventListener("htmx:afterRequest", function(evt) {
-    const path = evt.detail.pathInfo?.requestPath || "";
-    if (path === "/data/source" || path === "/data/filters") {
-        // Reload the sidebar too for filter visibility changes
-        if (path === "/data/source") {
-            fetch("/partials/sidebar")
-                .then(r => r.text())
-                .then(html => {
-                    document.getElementById("sidebar").innerHTML = html;
-                    htmx.process(document.getElementById("sidebar"));
-                });
-        }
-        reloadAll();
+    const container = document.getElementById("plots-container");
+    if (container) {
+        htmx.ajax("GET", `/plots?dataset_key=${encodeURIComponent(datasetKey)}`, {
+            target: "#plots-container", swap: "innerHTML"
+        });
     }
-});
+}
+
+// Called after clicking "View" on a dataset
+function onDatasetView(datasetKey) {
+    window.APP_CONFIG.viewingDataset = datasetKey;
+    // Refresh the dataset selector to update "Viewing" button state
+    htmx.ajax("GET", "/partials/dataset-selector", {target: "#dataset-selector", swap: "innerHTML"});
+}
 
 // Chat functions
 function onChatSend(event) {
@@ -122,19 +122,18 @@ function onChatSend(event) {
             return;
         }
     } else {
-        // Suggestion chip or other button — extract message from hx-vals
+        // Suggestion chip — extract message from hx-vals
         try {
             const vals = JSON.parse(event.target.getAttribute("hx-vals") || "{}");
             msg = vals.message || "";
         } catch(e) {}
     }
 
-    // Show user message immediately
     if (msg) {
         appendChatMessage("user", msg);
     }
 
-    // Show loading indicator with elapsed timer
+    // Show loading indicator with timer
     const loading = document.createElement("div");
     loading.className = "chat-loading";
     loading.id = "chat-loading";
@@ -142,7 +141,6 @@ function onChatSend(event) {
     document.getElementById("chat-messages").appendChild(loading);
     scrollChat();
 
-    // Update timer and cycle status messages
     const startTime = Date.now();
     const statuses = ["Thinking...", "Analyzing data...", "Running computations...", "Generating response..."];
     let statusIdx = 0;
@@ -151,14 +149,12 @@ function onChatSend(event) {
         const timer = loading.querySelector(".chat-loading-timer");
         const text = loading.querySelector(".chat-loading-text");
         if (timer) timer.textContent = `${elapsed}s`;
-        // Cycle status every 5 seconds
         if (elapsed % 5 === 0 && elapsed > 0 && statusIdx < statuses.length - 1) {
             statusIdx++;
             if (text) text.textContent = statuses[statusIdx];
         }
     }, 1000);
 
-    // Disable input
     if (btn) btn.disabled = true;
     if (input) {
         input.disabled = true;
@@ -167,7 +163,6 @@ function onChatSend(event) {
 }
 
 function onChatDone(event) {
-    // Clear timer and remove loading indicator
     if (window._chatTimer) {
         clearInterval(window._chatTimer);
         window._chatTimer = null;
@@ -175,7 +170,6 @@ function onChatDone(event) {
     const loading = document.getElementById("chat-loading");
     if (loading) loading.remove();
 
-    // Re-enable input
     const input = document.getElementById("chat-input");
     const btn = document.getElementById("chat-submit-btn");
     if (btn) btn.disabled = false;
@@ -185,13 +179,16 @@ function onChatDone(event) {
         input.focus();
     }
 
-    // Render markdown in new messages, then scroll after DOM settles
     renderMarkdown();
     setTimeout(scrollChat, 100);
 }
 
 function appendChatMessage(role, content) {
     const container = document.getElementById("chat-messages");
+    // Remove empty state if present
+    const empty = container.querySelector(".chat-empty-state");
+    if (empty) empty.remove();
+
     const div = document.createElement("div");
     div.className = `chat-msg chat-${role}`;
     div.innerHTML = `
@@ -220,8 +217,6 @@ function renderMarkdown() {
             el.innerHTML = marked.parse(raw);
             // Wrap python code blocks in collapsible <details>
             el.querySelectorAll("pre").forEach(pre => {
-                const code = pre.querySelector("code");
-                // Skip result/output blocks — only collapse code
                 const text = pre.textContent.trim();
                 if (text.startsWith("import ") || text.startsWith("# ") || text.startsWith("df") ||
                     text.includes("print(") || text.includes("= df") || text.includes(".mean(")) {
@@ -238,9 +233,52 @@ function renderMarkdown() {
     });
 }
 
+// Structure viewer
+let smilesDrawer = null;
+
+function showStructure(smiles, compoundName) {
+    if (!smiles) return;
+    const popup = document.getElementById("structure-popup");
+    const title = document.getElementById("structure-popup-title");
+
+    title.textContent = compoundName || smiles.substring(0, 30);
+    popup.style.display = "block";
+
+    // Initialize SmilesDrawer v1 if needed
+    if (!smilesDrawer && typeof SmilesDrawer !== "undefined") {
+        smilesDrawer = new SmilesDrawer.Drawer({width: 400, height: 300});
+    }
+
+    if (smilesDrawer) {
+        SmilesDrawer.parse(smiles, function(tree) {
+            smilesDrawer.draw(tree, "structure-canvas", "light", false);
+        }, function(err) {
+            console.error("SMILES parse error:", err);
+        });
+    }
+}
+
+function hideStructure() {
+    document.getElementById("structure-popup").style.display = "none";
+}
+
+// Close popup on outside click
+document.addEventListener("click", function(e) {
+    const popup = document.getElementById("structure-popup");
+    if (popup && popup.style.display === "block" && !popup.contains(e.target)) {
+        // Don't close if clicking a structure link
+        if (!e.target.closest("[onclick*='showStructure']") && !e.target.onclick) {
+            hideStructure();
+        }
+    }
+});
+
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", function() {
-    loadData();
-    loadPlots();
+    const key = window.APP_CONFIG.viewingDataset;
+    if (key) {
+        loadData(key);
+        loadPlots(key);
+    }
     renderMarkdown();
 });
