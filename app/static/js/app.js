@@ -17,7 +17,9 @@ function loadData(datasetKey) {
         .then(data => {
             if (!gridDiv) return;
 
+            const colDescs = data.column_descriptions || {};
             const columnDefs = data.columns.map(col => {
+                const desc = colDescs[col];
                 const def = {
                     field: col,
                     sortable: true,
@@ -26,7 +28,7 @@ function loadData(datasetKey) {
                     pinned: col === "Name" ? "left" : null,
                     width: 120,
                     tooltipField: col,
-                    headerTooltip: col,
+                    headerTooltip: desc ? `${col}: ${desc}` : col,
                 };
                 // Make Structure column clickable to show 2D molecule
                 if (col === "Structure") {

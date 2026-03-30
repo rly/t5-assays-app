@@ -19,24 +19,24 @@
 
 <div class="chat-suggestions">
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Summarize the provided datasets. What are the key findings and patterns?"}'
+            hx-vals='{"message": "Which compounds show the tightest binding (lowest KD_M) with good data quality (Chi2 < 10, RMSE < 10)? Rank the top 10."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
-        Summarize datasets
+        Top binders
     </button>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Find the top binding candidates across the provided data."}'
+            hx-vals='{"message": "Do the AI docking predictions (VEEV - AI Binding Score) agree with the experimental SPR results (KD_M)? Which compounds does the AI predict as strong binders that SPR confirms, and which does it get wrong?"}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
-        Find top candidates
+        AI vs experiment
     </button>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Compare the results across the provided datasets. Where do the assays agree or disagree?"}'
+            hx-vals='{"message": "Are there compounds that show strong binding across multiple assays or viruses? Identify consensus hits that appear as top candidates in more than one dataset."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
-        Compare datasets
+        Cross-assay hits
     </button>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "What are the most important columns and parameters to look at?"}'
+            hx-vals='{"message": "Based on all the data, what are the top 5 compounds I should prioritize for further study (e.g., crystallography, cellular assays, counter-screens)? Consider binding affinity, data quality, drug-likeness, and cross-assay agreement. Explain your reasoning for each."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
-        Key parameters
+        What should I test next?
     </button>
     <span class="tooltip-wrapper">
         <button class="suggestion-chip report-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
@@ -51,7 +51,7 @@
 <div id="chat-messages">
     {% if not messages %}
     <div class="chat-empty-state">
-        Select datasets to provide to the AI, then ask a question or click a suggestion above.
+        Ask a question or click a suggestion above to get started.
     </div>
     {% endif %}
     {% for msg in messages %}

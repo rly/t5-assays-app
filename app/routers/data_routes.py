@@ -61,7 +61,7 @@ def _ensure_dataset_selections(db: Session, user: User):
                 dataset_key=ds["key"],
                 dataset_type=ds["type"],
                 display_name=ds["display_name"],
-                provided_to_ai=False,
+                provided_to_ai=True,
                 filters_json=json.dumps(ds.get("default_filters", {})),
             )
             db.add(selection)
@@ -185,14 +185,21 @@ async def index(request: Request, user: User = Depends(get_current_user), db: Se
     messages = get_chat_messages(db, conv.id)
     conv_tokens, conv_cost = get_conversation_stats(db, conv.id)
 
-    # Get viewing dataset info
+    # Get viewing dataset info + filters
     viewing_key = prefs.viewing_dataset_key
     viewing_display_name = ""
+    viewing_filter_html = ""
     if viewing_key:
         for ds in datasets:
             if ds["key"] == viewing_key:
                 viewing_display_name = ds["display_name"]
                 break
+        sel = db.query(DatasetSelection).filter(
+            DatasetSelection.user_id == user.id,
+            DatasetSelection.dataset_key == viewing_key,
+        ).first()
+        filters = json.loads(sel.filters_json) if sel and sel.filters_json else {}
+        viewing_filter_html = _build_filter_panel(viewing_key, filters)
 
     # Get selected model display name
     selected_model_name = MODEL_DISPLAY_NAMES.get(prefs.selected_model, "Select model")
@@ -204,6 +211,7 @@ async def index(request: Request, user: User = Depends(get_current_user), db: Se
         "datasets": datasets,
         "viewing_key": viewing_key,
         "viewing_display_name": viewing_display_name,
+        "viewing_filter_html": viewing_filter_html,
         "ai_dataset_count": ai_count,
         "ai_dataset_names": ai_names,
         "selected_model_name": selected_model_name,

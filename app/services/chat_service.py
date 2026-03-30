@@ -137,20 +137,24 @@ class ChatDeps:
 
 
 def _describe_dataset(name: str, df: pd.DataFrame) -> str:
-    """Generate column summary for a single dataset."""
+    """Generate column summary for a single dataset, with human-readable descriptions."""
+    from app.column_descriptions import COLUMN_DESCRIPTIONS
+
     col_descriptions = []
     for col in df.columns:
         non_null = int(df[col].notna().sum())
+        human_desc = COLUMN_DESCRIPTIONS.get(col, "")
+        label = f"{col} — {human_desc}" if human_desc else col
         try:
             numeric = pd.to_numeric(df[col], errors="coerce")
             if numeric.notna().sum() > non_null * 0.5 and numeric.notna().sum() > 0:
-                desc = f"  - {col} (numeric, {non_null} non-null, min={numeric.min():.4g}, max={numeric.max():.4g}, mean={numeric.mean():.4g})"
+                desc = f"  - {label} (numeric, {non_null} non-null, min={numeric.min():.4g}, max={numeric.max():.4g}, mean={numeric.mean():.4g})"
             else:
                 raise ValueError()
         except (ValueError, TypeError):
             n_unique = df[col].nunique()
             sample = df[col].dropna().head(3).tolist()
-            desc = f"  - {col} (text, {non_null} non-null, {n_unique} unique, e.g. {sample})"
+            desc = f"  - {label} (text, {non_null} non-null, {n_unique} unique, e.g. {sample})"
         col_descriptions.append(desc)
 
     var_name = name.replace(" ", "_").replace("-", "_")

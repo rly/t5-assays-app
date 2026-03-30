@@ -44,6 +44,7 @@
             <h3>{{ viewing_display_name }}</h3>
             <span id="row-count" class="badge"></span>
         </div>
+        {{ viewing_filter_html | safe }}
         <div id="data-grid" style="height: 500px; width: 100%;"></div>
         {% else %}
         <p class="empty-state">Select a dataset above and click "View" to see the data table.</p>
