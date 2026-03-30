@@ -60,7 +60,9 @@ def get_api_key(user_key: str | None) -> str:
 
 
 def is_model_allowed(model_id: str, user_key: str | None) -> bool:
-    """Check if the model can be used with the given key."""
+    """Check if the model can be used. Always allowed if a default key is configured."""
+    if settings.openrouter_default_api_key:
+        return True
     if model_id in FREE_MODELS:
         return True
     return bool(user_key)
