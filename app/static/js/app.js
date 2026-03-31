@@ -106,9 +106,25 @@ function loadPlots(datasetKey) {
 
 // Called after clicking "View" on a dataset
 function onDatasetView(datasetKey) {
-    window.APP_CONFIG.viewingDataset = datasetKey;
-    // Refresh the dataset selector to update "Viewing" button state
-    htmx.ajax("GET", "/partials/dataset-selector", {target: "#dataset-selector", swap: "innerHTML"});
+    // The server response's <script> sets window.APP_CONFIG.viewingDataset.
+    // Wait a tick for that to execute, then update button states.
+    setTimeout(function() {
+        var viewing = window.APP_CONFIG.viewingDataset;
+        document.querySelectorAll(".ds-view-btn").forEach(function(btn) {
+            var btnKey = btn.getAttribute("hx-post").replace("/datasets/", "").replace("/view", "");
+            if (btnKey === viewing) {
+                btn.textContent = "Viewing";
+                btn.classList.remove("outline");
+                btn.classList.add("ds-view-active");
+                btn.closest("tr").classList.add("ds-viewing");
+            } else {
+                btn.textContent = "View";
+                btn.classList.add("outline");
+                btn.classList.remove("ds-view-active");
+                btn.closest("tr").classList.remove("ds-viewing");
+            }
+        });
+    }, 50);
 }
 
 // Chat functions

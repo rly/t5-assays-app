@@ -80,13 +80,16 @@ def _get_datasets_for_template(db: Session, user: User, prefs: UserPreference) -
         filter_parts = [f"{col} < {val}" for col, val in filters.items()]
         filter_summary = ", ".join(filter_parts) if filter_parts else ""
 
-        # Get row count (cached data)
-        row_count = None
+        # Get row counts (cached data)
+        total_rows = None
+        filtered_rows = None
         try:
             df = load_dataset(sel.dataset_key)
+            total_rows = len(df)
             if filters:
-                df = apply_filters(df, filters)
-            row_count = len(df)
+                filtered_rows = len(apply_filters(df, filters))
+            else:
+                filtered_rows = total_rows
         except Exception:
             pass
 
@@ -96,8 +99,9 @@ def _get_datasets_for_template(db: Session, user: User, prefs: UserPreference) -
             "type": sel.dataset_type,
             "description": "",
             "provided_to_ai": sel.provided_to_ai,
+            "total_rows": total_rows,
+            "filtered_rows": filtered_rows,
             "filter_summary": filter_summary,
-            "row_count": row_count,
         })
 
     # Sort: merges first, then sheets alphabetically
@@ -210,6 +214,7 @@ async def index(request: Request, user: User = Depends(get_current_user), db: Se
         "models": MODEL_MAPPING,
         "datasets": datasets,
         "viewing_key": viewing_key,
+        "all_checked": all(ds["provided_to_ai"] for ds in datasets),
         "viewing_display_name": viewing_display_name,
         "viewing_filter_html": viewing_filter_html,
         "ai_dataset_count": ai_count,
@@ -231,7 +236,33 @@ async def dataset_selector_partial(request: Request, user: User = Depends(get_cu
     return templates.TemplateResponse(request, "partials/dataset_selector.html", {
         "datasets": datasets,
         "viewing_key": prefs.viewing_dataset_key,
+        "all_checked": all(ds["provided_to_ai"] for ds in datasets),
     })
+
+
+@router.post("/datasets/toggle-all", response_class=HTMLResponse)
+async def toggle_all(request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Toggle all datasets: if any are checked, uncheck all; otherwise check all."""
+    _ensure_dataset_selections(db, user)
+    selections = user.dataset_selections
+    any_checked = any(s.provided_to_ai for s in selections)
+    for s in selections:
+        s.provided_to_ai = not any_checked
+    db.commit()
+    db.refresh(user)
+
+    prefs = get_prefs(db, user)
+    datasets = _get_datasets_for_template(db, user, prefs)
+    ai_count, ai_names = _get_ai_dataset_info(db, user)
+
+    selector_html = templates.TemplateResponse(request, "partials/dataset_selector.html", {
+        "datasets": datasets,
+        "viewing_key": prefs.viewing_dataset_key,
+        "all_checked": all(ds["provided_to_ai"] for ds in datasets),
+    }).body.decode()
+
+    badge_oob = f'<span id="ai-dataset-count" class="ai-dataset-badge" title="{ai_names}" hx-swap-oob="true">{ai_count} dataset{"s" if ai_count != 1 else ""} provided to AI</span>'
+    return HTMLResponse(selector_html + badge_oob)
 
 
 @router.post("/datasets/{key:path}/view", response_class=HTMLResponse)
@@ -309,6 +340,7 @@ async def toggle_provide(key: str, request: Request, user: User = Depends(get_cu
     selector_html = templates.TemplateResponse(request, "partials/dataset_selector.html", {
         "datasets": datasets,
         "viewing_key": prefs.viewing_dataset_key,
+        "all_checked": all(ds["provided_to_ai"] for ds in datasets),
     }).body.decode()
 
     badge_oob = f'<span id="ai-dataset-count" class="ai-dataset-badge" title="{ai_names}" hx-swap-oob="true">{ai_count} dataset{"s" if ai_count != 1 else ""} provided to AI</span>'

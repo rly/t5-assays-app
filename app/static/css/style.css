@@ -111,6 +111,13 @@ html, body {
 }
 
 /* Dataset selector */
+#dataset-selector {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: var(--pico-border-radius);
+}
+
 .dataset-table {
     width: 100%;
     font-size: 0.8rem;
@@ -123,6 +130,10 @@ html, body {
     color: var(--pico-muted-color);
     padding: 0.4rem 0.5rem;
     border-bottom: 1px solid var(--pico-muted-border-color);
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 1;
 }
 
 .dataset-table td {
@@ -181,10 +192,37 @@ html, body {
     font-variant-numeric: tabular-nums;
 }
 
-.ds-filter-icon {
-    cursor: help;
-    font-size: 0.9rem;
+.ds-total-rows {
     color: var(--pico-muted-color);
+    font-size: 0.7rem;
+}
+
+.ds-rows-wrapper {
+    position: relative;
+    cursor: default;
+}
+
+.ds-rows-wrapper .ds-filter-tooltip {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: white;
+    font-size: 0.7rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    transition: opacity 0.1s;
+    z-index: 10;
+}
+
+.ds-rows-wrapper:hover .ds-filter-tooltip {
+    visibility: visible;
+    opacity: 1;
 }
 
 .ds-view-btn {
@@ -259,6 +297,12 @@ html, body {
     align-items: center;
 }
 
+.filter-form button {
+    width: auto !important;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 .filter-label {
     display: flex;
     align-items: center;
@@ -282,6 +326,13 @@ html, body {
     color: var(--pico-muted-color);
     font-size: 0.7rem;
     font-style: italic;
+}
+
+.datasets-help {
+    display: block;
+    color: var(--pico-muted-color);
+    font-size: 0.7rem;
+    margin-bottom: 0.5rem;
 }
 
 .empty-state {

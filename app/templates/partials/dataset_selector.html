@@ -6,28 +6,38 @@
             <th>Rows</th>
             <th></th>
             <th></th>
-            <th>&rarr; AI</th>
+            <th>&rarr; AI<br><input type="checkbox" class="ds-ai-toggle"
+                       {{ 'checked' if all_checked }}
+                       hx-post="/datasets/toggle-all" hx-target="#dataset-selector" hx-swap="innerHTML"
+                       title="Select all / deselect all for AI"></th>
         </tr>
     </thead>
     <tbody>
-        {% for ds in datasets if ds.type != 'merge-source' %}
+        {% for ds in datasets %}
         <tr class="{{ 'ds-viewing' if ds.key == viewing_key }}">
             <td>
                 <span class="ds-name">{{ ds.display_name }}</span>
                 {% if ds.description %}<br><small class="ds-desc">{{ ds.description }}</small>{% endif %}
             </td>
             <td><span class="ds-type-badge ds-type-{{ ds.type }}">{{ ds.type }}</span></td>
-            <td class="ds-rows">{{ ds.row_count if ds.row_count else '—' }}</td>
-            <td>
-                {% if ds.filter_summary %}
-                <span class="ds-filter-icon" title="Filters: {{ ds.filter_summary }}">&#9881;</span>
-                {% endif %}
+            <td class="ds-rows">
+                <span class="ds-rows-wrapper">
+                    {% if ds.filter_summary and ds.filtered_rows != ds.total_rows %}
+                        {{ ds.filtered_rows }}<small class="ds-total-rows"> / {{ ds.total_rows }}</small>
+                    {% else %}
+                        {{ ds.total_rows if ds.total_rows else '—' }}
+                    {% endif %}
+                    {% if ds.filter_summary %}
+                    <span class="ds-filter-tooltip">{{ ds.filter_summary }}</span>
+                    {% endif %}
+                </span>
             </td>
+            <td></td>
             <td>
                 <button class="btn-sm ds-view-btn {{ 'ds-view-active' if ds.key == viewing_key else 'outline' }}"
                         hx-post="/datasets/{{ ds.key }}/view"
                         hx-target="#data-section"
-                        hx-swap="innerHTML"
+                        hx-swap="innerHTML show:none"
                         hx-on::after-request="onDatasetView('{{ ds.key }}')">
                     {{ 'Viewing' if ds.key == viewing_key else 'View' }}
                 </button>
@@ -44,43 +54,3 @@
         {% endfor %}
     </tbody>
 </table>
-
-{% set source_datasets = datasets | selectattr('type', 'equalto', 'merge-source') | list %}
-{% if source_datasets %}
-<details class="merge-source-toggle">
-    <summary>Show {{ source_datasets | length }} merge source sheets</summary>
-    <table class="dataset-table dataset-table-secondary">
-        <tbody>
-            {% for ds in source_datasets %}
-            <tr>
-                <td><span class="ds-name">{{ ds.display_name }}</span></td>
-                <td><span class="ds-type-badge ds-type-merge-source">source</span></td>
-                <td class="ds-rows">{{ ds.row_count if ds.row_count else '—' }}</td>
-                <td>
-                    {% if ds.filter_summary %}
-                    <span class="ds-filter-icon" title="Filters: {{ ds.filter_summary }}">&#9881;</span>
-                    {% endif %}
-                </td>
-                <td>
-                    <button class="btn-sm outline"
-                            hx-post="/datasets/{{ ds.key }}/view"
-                            hx-target="#data-section"
-                            hx-swap="innerHTML"
-                            hx-on::after-request="onDatasetView('{{ ds.key }}')">
-                        {{ 'Viewing' if ds.key == viewing_key else 'View' }}
-                    </button>
-                </td>
-                <td>
-                    <input type="checkbox" class="ds-ai-toggle"
-                           {{ 'checked' if ds.provided_to_ai }}
-                           hx-post="/datasets/{{ ds.key }}/provide"
-                           hx-target="#dataset-selector"
-                           hx-swap="innerHTML"
-                           title="Provide this dataset to the AI model">
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</details>
-{% endif %}
