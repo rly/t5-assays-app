@@ -1,15 +1,16 @@
 <details class="ai-model-settings">
     <summary>AI Model: {{ selected_model_name }}</summary>
     <div class="ai-model-form">
-        <label>OpenRouter API Key</label>
-        <input type="password" name="openrouter_key" value="{{ api_key }}"
-               placeholder="sk-or-..." hx-post="/prefs/apikey" hx-trigger="change" hx-swap="none">
         <label>Model</label>
         <select name="model" hx-post="/prefs/model" hx-trigger="change" hx-swap="none">
             {% for name, model_id in models.items() %}
             <option value="{{ model_id }}" {{ 'selected' if prefs.selected_model == model_id }}>{{ name }}</option>
             {% endfor %}
         </select>
+        <label>OpenRouter API Key</label>
+        <input type="password" name="openrouter_key" value="{{ api_key }}"
+               placeholder="Using shared key — enter your own to use your own credits"
+               hx-post="/prefs/apikey" hx-trigger="change" hx-swap="none">
     </div>
 </details>
 
