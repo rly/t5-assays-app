@@ -48,12 +48,12 @@
         <span class="tooltip-text">Detailed multi-step analysis. Uses more tokens.</span>
     </span>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Which compounds pass Lipinski'\''s Rule of Five (MW ≤ 500, LogP ≤ 5, H-bond donors ≤ 5, H-bond acceptors ≤ 10)? Use RDKit to compute these properties from the Structure column and list the passing compounds with their values."}'
+            hx-vals='{"message": "Which compounds pass Lipinski&#39;s Rule of Five (MW ≤ 500, LogP ≤ 5, H-bond donors ≤ 5, H-bond acceptors ≤ 10)? Use RDKit to compute these properties from the Structure column and list the passing compounds with their values."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
         Drug-likeness filter
     </button>
     <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
-            hx-vals='{"message": "Compute molecular weight, LogP, and TPSA for all compounds using RDKit. Plot LogP vs TPSA coloured by whether each compound passes Lipinski'\''s Rule of Five."}'
+            hx-vals='{"message": "Compute molecular weight, LogP, and TPSA for all compounds using RDKit. Plot LogP vs TPSA coloured by whether each compound passes Lipinski&#39;s Rule of Five."}'
             hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
         LogP vs TPSA
     </button>
