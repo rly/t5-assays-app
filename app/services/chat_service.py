@@ -260,7 +260,7 @@ def _describe_dataset(name: str, df: pd.DataFrame) -> str:
 
     var_name = name.replace(" ", "_").replace("-", "_")
     return (
-        f'Dataset "{name}" (variable: {var_name}, {len(df)} rows x {len(df.columns)} cols):\n'
+        f'Dataset datasets["{var_name}"] ({len(df)} rows x {len(df.columns)} cols):\n'
         + "\n".join(col_descriptions)
     )
 
@@ -273,16 +273,12 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
 
     data_context = "\n\n".join(dataset_descriptions)
 
-    # Build variable list for the prompt
+    # Build variable list for the prompt — keys in the datasets dict are sanitized
+    # (spaces and hyphens replaced with underscores) to match valid Python identifiers.
     var_list = []
     for name in datasets:
         var_name = name.replace(" ", "_").replace("-", "_")
-        var_list.append(f'  - {var_name} (or datasets["{name}"])')
-
-    if len(datasets) == 1:
-        access_note = "For convenience, the single dataset is also available as `df`.\n"
-    else:
-        access_note = ""
+        var_list.append(f'  - datasets["{var_name}"]')
 
     return (
         "You are a helpful data analyst assistant for alphaviral macrodomain assay data. "
@@ -295,12 +291,22 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "COMPUTATION:\n"
         "- You have a `run_python` tool that executes Python code.\n"
         f"- Available datasets ({len(datasets)}):\n" + "\n".join(var_list) + "\n"
-        f"{access_note}"
+        "- Dataset keys use underscores in place of spaces and hyphens (e.g. \"My Sheet\" → \"My_Sheet\").\n"
         "- ALWAYS use the run_python tool to access, query, or analyze data. You can see column summaries below but NOT the raw data.\n"
         "- Use print() in your code to produce output.\n"
-        "- You can call the tool multiple times to do multi-step analysis.\n"
+        "- CRITICAL: Each run_python call is a completely independent subprocess. NO variables, DataFrames, or\n"
+        "  state of any kind persist between calls. Every call must be fully self-contained — re-load datasets\n"
+        "  and recompute everything needed from scratch. Never reference a variable created in a previous call.\n"
+        "- You can call the tool multiple times to do multi-step analysis, but each call must stand alone.\n"
         "- NEVER guess, fabricate, or estimate data values. Always compute them using run_python.\n"
         "- If your code produces an error, fix it and try again.\n\n"
+        "MERGING DATAFRAMES:\n"
+        "- After any merge(), ALWAYS print the resulting columns before using them:\n"
+        "    merged = df1.merge(df2, ...)\n"
+        "    print(merged.columns.tolist())  # inspect first!\n"
+        "- pandas only adds _x/_y suffixes when BOTH DataFrames share the same column name.\n"
+        "  If a column exists in only one DataFrame it keeps its original name — never assume _x or _y.\n"
+        "- Use suffixes= to control suffix names if needed: merge(..., suffixes=('_spr', '_dock'))\n\n"
         "CHEMINFORMATICS (RDKit):\n"
         "RDKit is available for molecular analysis. The 'Structure' column (when present) contains SMILES strings.\n"
         "Quick reference:\n"
@@ -954,9 +960,9 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
     @agent.tool
     def run_python(ctx: RunContext[ChatDeps], code: str) -> str:
         """Execute Python code against the provided datasets.
-        Available variables: each dataset as a named variable (e.g., VEEV_PEITHO_SPR), plus a 'datasets' dict.
-        If only one dataset is provided, 'df' is also available.
-        Use print() to output results. pandas, numpy, rdkit, math, statistics, re, datetime are available.
+        Access datasets via the 'datasets' dict using sanitized keys (spaces/hyphens replaced with underscores),
+        e.g. datasets["My_Sheet_Name"]. Use print() to output results.
+        pandas, numpy, rdkit, math, statistics, re, datetime are available.
         Do NOT use pubchempy or make network requests in run_python — use the lookup_pubchem tool instead."""
         result = execute_code(code, ctx.deps.datasets)
         if result["success"]:

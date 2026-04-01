@@ -28,18 +28,8 @@ try:
     from rdkit import DataStructs
 except ImportError:
     pass
-# Load datasets dict from temp file
+# Load datasets dict from temp file (keys are already sanitized)
 datasets = pickle.loads(open(sys.argv[1], 'rb').read())
-
-# Make each dataset available as a standalone variable
-for _name, _df in datasets.items():
-    # Sanitize name for use as variable (replace spaces/hyphens with underscores)
-    _var_name = _name.replace(" ", "_").replace("-", "_")
-    globals()[_var_name] = _df
-
-# Backward compat: if only one dataset, also set 'df'
-if len(datasets) == 1:
-    df = list(datasets.values())[0]
 
 # Install import restriction hook
 _BLOCKED = {
@@ -95,8 +85,15 @@ def execute_code(code: str, datasets: dict[str, pd.DataFrame]) -> dict:
     Returns:
         {"success": True, "output": str} or {"success": False, "error": str}
     """
+    # Sanitize dataset keys (spaces/hyphens → underscores) so the AI can use
+    # datasets["Sheet_Name"] consistently without worrying about original names.
+    sanitized = {
+        name.replace(" ", "_").replace("-", "_"): df
+        for name, df in datasets.items()
+    }
+
     with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-        pickle.dump(datasets, f)
+        pickle.dump(sanitized, f)
         pkl_path = f.name
 
     code_repr = repr(code)
