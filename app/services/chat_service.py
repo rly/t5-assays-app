@@ -202,6 +202,36 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "- You can call the tool multiple times to do multi-step analysis.\n"
         "- NEVER guess, fabricate, or estimate data values. Always compute them using run_python.\n"
         "- If your code produces an error, fix it and try again.\n\n"
+        "CHEMINFORMATICS (RDKit):\n"
+        "RDKit is available for molecular analysis. The 'Structure' column (when present) contains SMILES strings.\n"
+        "Quick reference:\n"
+        "  from rdkit import Chem\n"
+        "  from rdkit.Chem import AllChem, Descriptors, Draw\n"
+        "  from rdkit import DataStructs\n\n"
+        "  # Parse SMILES\n"
+        "  mol = Chem.MolFromSmiles(smiles_string)  # returns None if invalid\n\n"
+        "  # Molecular descriptors\n"
+        "  Descriptors.MolWt(mol)           # molecular weight\n"
+        "  Descriptors.MolLogP(mol)         # LogP\n"
+        "  Descriptors.TPSA(mol)            # topological polar surface area\n"
+        "  Descriptors.NumHDonors(mol)      # H-bond donors\n"
+        "  Descriptors.NumHAcceptors(mol)   # H-bond acceptors\n"
+        "  Descriptors.NumRotatableBonds(mol)\n"
+        "  Descriptors.CalcMolDescriptors(mol)  # dict of all descriptors\n\n"
+        "  # Lipinski Rule of Five: MW<=500, LogP<=5, HBD<=5, HBA<=10\n\n"
+        "  # Fingerprints & similarity\n"
+        "  fpgen = AllChem.GetMorganGenerator(radius=2)\n"
+        "  fp = fpgen.GetFingerprint(mol)\n"
+        "  DataStructs.TanimotoSimilarity(fp1, fp2)  # 0-1 similarity\n\n"
+        "  # Substructure search\n"
+        "  pattern = Chem.MolFromSmarts('[OH]')  # SMARTS pattern\n"
+        "  mol.HasSubstructMatch(pattern)  # True/False\n"
+        "  mol.GetSubstructMatches(pattern)  # atom indices\n\n"
+        "  # Bulk: compute descriptors for a DataFrame column of SMILES\n"
+        "  df['mol'] = df['Structure'].apply(Chem.MolFromSmiles)\n"
+        "  df['MW'] = df['mol'].apply(lambda m: Descriptors.MolWt(m) if m else None)\n\n"
+        "Use RDKit when asked about molecular properties, structural similarity, substructure searches,\n"
+        "drug-likeness filtering, or SAR (structure-activity relationship) analysis.\n\n"
         f"Data context:\n{data_context}\n\n"
         "Answer questions accurately. Highlight key findings and actionable insights."
     )
@@ -225,7 +255,7 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
         """Execute Python code against the provided datasets.
         Available variables: each dataset as a named variable (e.g., VEEV_PEITHO_SPR), plus a 'datasets' dict.
         If only one dataset is provided, 'df' is also available.
-        Use print() to output results. Only pandas, numpy, math, statistics, re, datetime are available."""
+        Use print() to output results. pandas, numpy, rdkit, math, statistics, re, datetime are available."""
         result = execute_code(code, ctx.deps.datasets)
         if result["success"]:
             output = result.get("output", "").strip()

@@ -18,10 +18,16 @@ TIMEOUT_SECONDS = 30
 RUNNER_TEMPLATE = '''
 import sys, io, json, pickle, os
 
-# Import pandas/numpy BEFORE installing the import restriction hook
+# Import pandas/numpy/rdkit BEFORE installing the import restriction hook
 import pandas as pd
 import numpy as np
 import math, statistics, re, datetime, collections, itertools, functools, decimal
+try:
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, Descriptors, Draw, rdMolDescriptors
+    from rdkit import DataStructs
+except ImportError:
+    pass
 
 # Load datasets dict from temp file
 datasets = pickle.loads(open(sys.argv[1], 'rb').read())
