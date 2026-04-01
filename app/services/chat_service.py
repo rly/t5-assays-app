@@ -6,6 +6,7 @@ Python code against the dataset via the run_python tool.
 import json
 import time
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -48,6 +49,79 @@ Rules:
 
 # Cache of model pricing: {model_id: {"prompt": float, "completion": float}}
 _model_pricing: dict[str, dict[str, float]] = {}
+
+# ---------------------------------------------------------------------------
+# PubChem REST API helpers (async, no pubchempy dependency)
+# ---------------------------------------------------------------------------
+
+PUBCHEM_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+PUBCHEM_TIMEOUT = 30.0
+PUBCHEM_PROPS = (
+    "IUPACName,MolecularFormula,MolecularWeight,IsomericSMILES,"
+    "XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount"
+)
+
+
+async def _pubchem_resolve_cid(
+    client: httpx.AsyncClient, identifier: str, identifier_type: str
+) -> int | None:
+    """Resolve a single identifier (SMILES, name, or CID string) to a PubChem CID."""
+    try:
+        if identifier_type == "cid":
+            return int(identifier)
+        elif identifier_type == "smiles":
+            resp = await client.post(
+                f"{PUBCHEM_BASE}/compound/smiles/cids/JSON",
+                data={"smiles": identifier},
+            )
+        else:  # name
+            resp = await client.get(
+                f"{PUBCHEM_BASE}/compound/name/{quote(identifier, safe='')}/cids/JSON",
+            )
+        if resp.status_code == 200:
+            cids = resp.json().get("IdentifierList", {}).get("CID", [])
+            return cids[0] if cids else None
+        return None
+    except Exception:
+        return None
+
+
+async def _pubchem_fetch_properties(
+    client: httpx.AsyncClient, cids: list[int]
+) -> dict[int, dict]:
+    """Batch-fetch compound properties for a list of CIDs in a single HTTP request."""
+    if not cids:
+        return {}
+    cid_str = ",".join(str(c) for c in cids)
+    try:
+        resp = await client.get(
+            f"{PUBCHEM_BASE}/compound/cid/{cid_str}/property/{PUBCHEM_PROPS}/JSON",
+        )
+        if resp.status_code != 200:
+            return {}
+        props_list = resp.json().get("PropertyTable", {}).get("Properties", [])
+        return {p["CID"]: p for p in props_list}
+    except Exception:
+        return {}
+
+
+async def _pubchem_fetch_synonyms(
+    client: httpx.AsyncClient, cids: list[int]
+) -> dict[int, list[str]]:
+    """Batch-fetch synonyms for a list of CIDs in a single HTTP request."""
+    if not cids:
+        return {}
+    cid_str = ",".join(str(c) for c in cids)
+    try:
+        resp = await client.get(
+            f"{PUBCHEM_BASE}/compound/cid/{cid_str}/synonyms/JSON",
+        )
+        if resp.status_code != 200:
+            return {}
+        info_list = resp.json().get("InformationList", {}).get("Information", [])
+        return {item["CID"]: item.get("Synonym", []) for item in info_list}
+    except Exception:
+        return {}
 
 
 async def _ensure_pricing_loaded():
@@ -283,6 +357,9 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "   Look up compounds by SMILES, name, or CID. Returns: cid, iupac_name, synonyms,\n"
         "   molecular_formula, molecular_weight, xlogp, tpsa, h_bond_donor/acceptor_count,\n"
         "   rotatable_bond_count, isomeric_smiles.\n"
+        "   LIMIT: at most 20 identifiers per call (CID resolution is sequential — one HTTP\n"
+        "   request per identifier). Extras are silently dropped. Split larger lists into\n"
+        "   multiple calls if needed.\n"
         "   Use for: compound identity, trade names, drug approval status, cross-referencing.\n\n"
         "2. `search_pubchem_by_substructure(smarts, max_results=20)`\n"
         "   Find all PubChem compounds containing a given SMARTS substructure.\n"
@@ -318,41 +395,56 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
     async def lookup_pubchem(ctx: RunContext[ChatDeps], identifiers: list[str], identifier_type: str = "smiles") -> str:
         """Look up compound data from PubChem for a list of SMILES strings, names, or CIDs.
 
+        CID resolution is performed sequentially (one HTTP request per identifier) because
+        PubChem has no batch name→CID or SMILES→CID endpoint. To keep latency reasonable,
+        the list is capped at 20 identifiers. Property and synonym fetches for all resolved
+        CIDs are then batched into a single request each.
+
         Args:
             identifiers: List of SMILES strings, compound names, or CID numbers (as strings).
+                         At most 20 entries are processed; extras are silently dropped.
             identifier_type: One of 'smiles', 'name', or 'cid'. Defaults to 'smiles'.
 
         Returns:
             JSON string with a list of compound records containing cid, iupac_name, synonyms,
-            molecular_formula, molecular_weight, xlogp, tpsa, h_bond_donor_count,
-            h_bond_acceptor_count, rotatable_bond_count, and isomeric_smiles.
+            molecular_formula, molecular_weight, xlogp, tpsa, h_bond_donor/acceptor_count,
+            rotatable_bond_count, and isomeric_smiles.
         """
-        import pubchempy as pcp
+        identifiers = identifiers[:20]
+        async with httpx.AsyncClient(timeout=PUBCHEM_TIMEOUT) as client:
+            # Resolve all identifiers to CIDs (sequential — each may be a different type)
+            cid_map: dict[str, int | None] = {}
+            for ident in identifiers:
+                cid_map[ident] = await _pubchem_resolve_cid(client, ident, identifier_type)
+
+            valid_cids = [cid for cid in cid_map.values() if cid is not None]
+
+            # Batch-fetch properties and synonyms in two requests total
+            props = await _pubchem_fetch_properties(client, valid_cids)
+            synonyms = await _pubchem_fetch_synonyms(client, valid_cids)
 
         results = []
-        for ident in identifiers[:20]:  # cap at 20 to avoid excessive API calls
-            try:
-                compounds = pcp.get_compounds(ident, identifier_type)
-                if compounds:
-                    c = compounds[0]
-                    results.append({
-                        "query": ident,
-                        "cid": c.cid,
-                        "iupac_name": c.iupac_name,
-                        "synonyms": (c.synonyms or [])[:5],
-                        "molecular_formula": c.molecular_formula,
-                        "molecular_weight": c.molecular_weight,
-                        "xlogp": c.xlogp,
-                        "tpsa": c.tpsa,
-                        "h_bond_donor_count": c.h_bond_donor_count,
-                        "h_bond_acceptor_count": c.h_bond_acceptor_count,
-                        "rotatable_bond_count": c.rotatable_bond_count,
-                        "isomeric_smiles": c.isomeric_smiles,
-                    })
-                else:
-                    results.append({"query": ident, "error": "Not found in PubChem"})
-            except Exception as e:
-                results.append({"query": ident, "error": str(e)})
+        for ident in identifiers:
+            cid = cid_map.get(ident)
+            if cid is None:
+                results.append({"query": ident, "error": "Not found in PubChem"})
+                continue
+            p = props.get(cid, {})
+            syns = synonyms.get(cid, [])
+            results.append({
+                "query": ident,
+                "cid": cid,
+                "iupac_name": p.get("IUPACName"),
+                "synonyms": syns[:5],
+                "molecular_formula": p.get("MolecularFormula"),
+                "molecular_weight": p.get("MolecularWeight"),
+                "xlogp": p.get("XLogP"),
+                "tpsa": p.get("TPSA"),
+                "h_bond_donor_count": p.get("HBondDonorCount"),
+                "h_bond_acceptor_count": p.get("HBondAcceptorCount"),
+                "rotatable_bond_count": p.get("RotatableBondCount"),
+                "isomeric_smiles": p.get("IsomericSMILES"),
+            })
 
         return json.dumps(results, indent=2)
 
@@ -367,22 +459,35 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
         Returns:
             JSON string with a list of matching compound records from PubChem.
         """
-        import pubchempy as pcp
-
         max_results = min(max_results, 100)
         try:
-            compounds = pcp.get_compounds(smarts, "smarts", listkey_count=max_results)
+            async with httpx.AsyncClient(timeout=PUBCHEM_TIMEOUT) as client:
+                # Fast substructure search → CID list (single synchronous REST call)
+                resp = await client.post(
+                    f"{PUBCHEM_BASE}/compound/fastsubstructure/smarts/cids/JSON",
+                    data={"smarts": smarts, "MaxRecords": max_results},
+                )
+                if resp.status_code != 200:
+                    return json.dumps({"error": f"PubChem substructure search failed (HTTP {resp.status_code})"})
+                cids = resp.json().get("IdentifierList", {}).get("CID", [])[:max_results]
+
+                if not cids:
+                    return json.dumps({"query_smarts": smarts, "count": 0, "compounds": []})
+
+                # Batch-fetch all compound properties in one request
+                props = await _pubchem_fetch_properties(client, cids)
+
             results = []
-            for c in compounds[:max_results]:
+            for cid in cids:
+                p = props.get(cid, {})
                 results.append({
-                    "cid": c.cid,
-                    "iupac_name": c.iupac_name,
-                    "synonyms": (c.synonyms or [])[:3],
-                    "molecular_formula": c.molecular_formula,
-                    "molecular_weight": c.molecular_weight,
-                    "isomeric_smiles": c.isomeric_smiles,
-                    "xlogp": c.xlogp,
-                    "tpsa": c.tpsa,
+                    "cid": cid,
+                    "iupac_name": p.get("IUPACName"),
+                    "molecular_formula": p.get("MolecularFormula"),
+                    "molecular_weight": p.get("MolecularWeight"),
+                    "isomeric_smiles": p.get("IsomericSMILES"),
+                    "xlogp": p.get("XLogP"),
+                    "tpsa": p.get("TPSA"),
                 })
             return json.dumps({"query_smarts": smarts, "count": len(results), "compounds": results}, indent=2)
         except Exception as e:
@@ -400,28 +505,36 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
         Returns:
             JSON string with a list of similar compound records from PubChem.
         """
-        import pubchempy as pcp
-
         max_results = min(max_results, 100)
         threshold = max(0, min(threshold, 100))
         try:
-            compounds = pcp.get_compounds(
-                smiles, "smiles",
-                searchtype="similarity",
-                Threshold=threshold,
-                listkey_count=max_results,
-            )
+            async with httpx.AsyncClient(timeout=PUBCHEM_TIMEOUT) as client:
+                # Fast 2D similarity search → CID list (single synchronous REST call)
+                resp = await client.post(
+                    f"{PUBCHEM_BASE}/compound/fastsimilarity_2d/smiles/cids/JSON",
+                    data={"smiles": smiles, "Threshold": threshold, "MaxRecords": max_results},
+                )
+                if resp.status_code != 200:
+                    return json.dumps({"error": f"PubChem similarity search failed (HTTP {resp.status_code})"})
+                cids = resp.json().get("IdentifierList", {}).get("CID", [])[:max_results]
+
+                if not cids:
+                    return json.dumps({"query_smiles": smiles, "threshold": threshold, "count": 0, "compounds": []})
+
+                # Batch-fetch all compound properties in one request
+                props = await _pubchem_fetch_properties(client, cids)
+
             results = []
-            for c in compounds[:max_results]:
+            for cid in cids:
+                p = props.get(cid, {})
                 results.append({
-                    "cid": c.cid,
-                    "iupac_name": c.iupac_name,
-                    "synonyms": (c.synonyms or [])[:3],
-                    "molecular_formula": c.molecular_formula,
-                    "molecular_weight": c.molecular_weight,
-                    "isomeric_smiles": c.isomeric_smiles,
-                    "xlogp": c.xlogp,
-                    "tpsa": c.tpsa,
+                    "cid": cid,
+                    "iupac_name": p.get("IUPACName"),
+                    "molecular_formula": p.get("MolecularFormula"),
+                    "molecular_weight": p.get("MolecularWeight"),
+                    "isomeric_smiles": p.get("IsomericSMILES"),
+                    "xlogp": p.get("XLogP"),
+                    "tpsa": p.get("TPSA"),
                 })
             return json.dumps({"query_smiles": smiles, "threshold": threshold, "count": len(results), "compounds": results}, indent=2)
         except Exception as e:
@@ -440,8 +553,6 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
         Returns:
             JSON string with bioassay activity summary records.
         """
-        import httpx
-
         url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/assaysummary/JSON"
         try:
             async with httpx.AsyncClient(timeout=15) as client:

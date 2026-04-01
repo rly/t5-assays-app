@@ -9,7 +9,7 @@ Web application for exploring alphaviral macrodomain assay data with AI-powered 
 - **Correlation plots** -- Plotly scatter plots with OLS trendlines for key assay comparisons.
 - **AI chat** -- Ask questions about the data using OpenRouter models. The AI can execute Python code (pandas/numpy/RDKit) against the dataset to compute answers.
 - **Tool calling** -- Pydantic AI handles the agentic loop: the model calls `run_python` and PubChem tools, sees results, and can iterate.
-- **Cheminformatics** -- RDKit runs inside the sandboxed Python environment for local molecular analysis. PubChemPy runs in the main process as dedicated agent tools for live PubChem database queries.
+- **Cheminformatics** -- RDKit runs inside the sandboxed Python environment for local molecular analysis. Async `httpx` calls to the PubChem REST API run in the main process as dedicated agent tools for live database queries (no `pubchempy` dependency).
 - **Cost tracking** -- Per-message and per-conversation token counts and estimated costs.
 - **Authentication** -- Simple email/password login with encrypted session cookies.
 
@@ -110,7 +110,7 @@ Four agent tools query the PubChem REST API from the main process. The sandbox b
 
 | Tool | Description |
 |---|---|
-| `lookup_pubchem` | Fetch metadata (IUPAC name, synonyms, MW, LogP, TPSA, CID) for a list of SMILES, names, or CIDs |
+| `lookup_pubchem` | Fetch metadata (IUPAC name, synonyms, MW, LogP, TPSA, CID) for a list of SMILES, names, or CIDs (max 20 — CID resolution is sequential, one request per identifier) |
 | `search_pubchem_by_substructure` | Find all PubChem compounds containing a SMARTS substructure |
 | `search_pubchem_by_similarity` | Find analogs by Tanimoto similarity threshold (0–100%) |
 | `get_pubchem_bioassays` | Retrieve bioassay activity history for a compound CID |
