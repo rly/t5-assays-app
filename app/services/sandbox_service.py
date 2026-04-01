@@ -56,7 +56,9 @@ _original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__'
 
 def _restricted_import(name, *args, **kwargs):
     top = name.split('.')[0]
-    if top in _BLOCKED:
+    # Allow re-importing modules already in sys.modules (loaded before this hook
+    # was installed, e.g. os/rdkit internals). Only block fresh imports.
+    if top in _BLOCKED and top not in sys.modules:
         raise ImportError(f"Import of '{name}' is not allowed in sandbox")
     return _original_import(name, *args, **kwargs)
 

@@ -64,6 +64,38 @@
     </button>
     <span class="tooltip-wrapper">
         <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Use run_python to extract the SMILES and names of the top 20 binders, then call compute_descriptors to get MW, LogP, TPSA, HBD, HBA, RotBonds, QED, and Lipinski pass/fail for each. Summarise the results in a table."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            Compute descriptors
+        </button>
+        <span class="tooltip-text">Computes MW, LogP, TPSA, QED, and Lipinski Ro5 for the top hits using the compute_descriptors tool.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Use run_python to extract the SMILES and names of the top 50 binders, then call cluster_by_scaffold to group them by Murcko scaffold and Butina fingerprint clustering. How many distinct chemical series are represented? Which scaffold is most common?"}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            Cluster by scaffold
+        </button>
+        <span class="tooltip-text">Groups hits into chemical series using Murcko scaffold decomposition and Butina clustering.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Use run_python to extract the SMILES and names of the top 15 binders, then call compute_tanimoto_matrix to get pairwise Morgan fingerprint similarities. Present the results as a similarity matrix and identify the most structurally diverse subset."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            Tanimoto matrix
+        </button>
+        <span class="tooltip-text">Computes a pairwise Tanimoto similarity matrix for the top hits using Morgan fingerprints.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Use run_python to extract the SMILES and names of the top 20 binders, then call predict_admet to assess GI absorption, BBB permeability, P-gp substrate likelihood, CYP inhibition risk, and PAINS/Brenk structural alerts. Flag any problematic compounds and summarise the findings."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            ADMET predictions
+        </button>
+        <span class="tooltip-text">Rule-based ADMET triage: absorption, BBB, P-gp, CYP inhibition, PAINS, and Brenk alerts. No external API.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
                 hx-vals='{"message": "Look up the top 5 binders in PubChem. For each, retrieve the IUPAC name, known synonyms/trade names, and whether it has been tested in any bioassays. Use run_python to extract their SMILES, then use the lookup_pubchem and get_pubchem_bioassays tools."}'
                 hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
             PubChem lookup

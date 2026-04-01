@@ -236,6 +236,22 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "  print(fig.to_json())  # fig.show() does nothing in the sandbox\n\n"
         "Use RDKit when asked about molecular properties, structural similarity, substructure searches,\n"
         "drug-likeness filtering, or SAR (structure-activity relationship) analysis.\n\n"
+        "CHEMINFORMATICS TOOLS (faster than writing RDKit code by hand):\n"
+        "1. `compute_descriptors(smiles_list, names=None)`\n"
+        "   Compute MW, LogP, TPSA, HBD, HBA, RotBonds, QED, and Lipinski pass/fail for a list of SMILES.\n"
+        "   Returns a JSON table. Use this instead of writing descriptor loops in run_python.\n\n"
+        "2. `cluster_by_scaffold(smiles_list, names=None, cutoff=0.4)`\n"
+        "   Murcko scaffold decomposition + Butina fingerprint clustering.\n"
+        "   Returns cluster assignments and scaffold SMILES for each compound.\n"
+        "   Use to answer 'how many distinct chemical series are in the top hits?'\n\n"
+        "3. `compute_tanimoto_matrix(smiles_list, names=None)`\n"
+        "   Pairwise Morgan fingerprint Tanimoto similarity matrix for up to 100 compounds.\n"
+        "   Returns a JSON matrix. Use for diversity analysis or picking a representative set.\n\n"
+        "4. `predict_admet(smiles_list, names=None)`\n"
+        "   Rule-based ADMET prediction using RDKit (no external API required).\n"
+        "   Returns GI absorption, BBB permeability, P-gp substrate likelihood, CYP inhibition\n"
+        "   alerts (1A2, 2C9, 2C19, 2D6, 3A4), PAINS flags, and Brenk structural alerts.\n"
+        "   Use to flag problematic compounds before prioritizing hits.\n\n"
         "PUBCHEM TOOLS:\n"
         "You have four tools for querying the PubChem database. All make live network requests.\n\n"
         "1. `lookup_pubchem(identifiers, identifier_type='smiles')`\n"
@@ -419,6 +435,385 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
             return json.dumps({"cid": cid, "assay_count": len(rows), "assays": records}, indent=2)
         except Exception as e:
             return json.dumps({"cid": cid, "error": str(e)})
+
+    @agent.tool
+    def compute_descriptors(
+        ctx: RunContext[ChatDeps],
+        smiles_list: list[str],
+        names: list[str] | None = None,
+    ) -> str:
+        """Compute molecular descriptors for a list of SMILES strings.
+
+        Calculates MW, LogP, TPSA, H-bond donors/acceptors, rotatable bonds, QED,
+        and Lipinski Rule-of-Five pass/fail for each compound.
+
+        Args:
+            smiles_list: List of SMILES strings to process (max 500).
+            names: Optional list of compound names, same length as smiles_list.
+
+        Returns:
+            JSON string with a list of descriptor records, one per compound.
+            Invalid SMILES are included with an 'error' field instead of descriptors.
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import Descriptors, QED
+        except ImportError:
+            return json.dumps({"error": "RDKit is not installed"})
+
+        smiles_list = smiles_list[:500]
+        if names and len(names) != len(smiles_list):
+            names = None
+
+        records = []
+        for i, smi in enumerate(smiles_list):
+            name = names[i] if names else None
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                rec = {"smiles": smi, "error": "Invalid SMILES"}
+                if name:
+                    rec["name"] = name
+                records.append(rec)
+                continue
+            mw = Descriptors.MolWt(mol)
+            logp = Descriptors.MolLogP(mol)
+            tpsa = Descriptors.TPSA(mol)
+            hbd = Descriptors.NumHDonors(mol)
+            hba = Descriptors.NumHAcceptors(mol)
+            rotb = Descriptors.NumRotatableBonds(mol)
+            qed = round(QED.qed(mol), 4)
+            lipinski = mw <= 500 and logp <= 5 and hbd <= 5 and hba <= 10
+            rec = {
+                "smiles": smi,
+                "MW": round(mw, 3),
+                "LogP": round(logp, 3),
+                "TPSA": round(tpsa, 3),
+                "HBD": hbd,
+                "HBA": hba,
+                "RotBonds": rotb,
+                "QED": qed,
+                "Lipinski_pass": lipinski,
+            }
+            if name:
+                rec["name"] = name
+            records.append(rec)
+
+        return json.dumps({"count": len(records), "descriptors": records}, indent=2)
+
+    @agent.tool
+    def cluster_by_scaffold(
+        ctx: RunContext[ChatDeps],
+        smiles_list: list[str],
+        names: list[str] | None = None,
+        cutoff: float = 0.4,
+    ) -> str:
+        """Cluster compounds by Murcko scaffold and Morgan fingerprint similarity.
+
+        First extracts the Murcko scaffold for each compound, then performs
+        Butina clustering on Morgan fingerprints (radius=2) using the given
+        distance cutoff (1 - Tanimoto similarity).
+
+        Args:
+            smiles_list: List of SMILES strings (max 500).
+            names: Optional list of compound names, same length as smiles_list.
+            cutoff: Butina distance cutoff (default 0.4 = compounds with Tanimoto >= 0.6
+                    end up in the same cluster). Lower values = tighter clusters.
+
+        Returns:
+            JSON string with cluster assignments, scaffold SMILES, and cluster sizes.
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+            from rdkit.Chem.Scaffolds import MurckoScaffold
+            from rdkit import DataStructs
+            from rdkit.ML.Cluster import Butina
+        except ImportError:
+            return json.dumps({"error": "RDKit is not installed"})
+
+        smiles_list = smiles_list[:500]
+        if names and len(names) != len(smiles_list):
+            names = None
+
+        fpgen = AllChem.GetMorganGenerator(radius=2)
+        mols, fps, valid_idx = [], [], []
+        for i, smi in enumerate(smiles_list):
+            mol = Chem.MolFromSmiles(smi)
+            if mol:
+                mols.append(mol)
+                fps.append(fpgen.GetFingerprint(mol))
+                valid_idx.append(i)
+
+        if not fps:
+            return json.dumps({"error": "No valid SMILES provided"})
+
+        # Butina clustering
+        n = len(fps)
+        dists = []
+        for i in range(1, n):
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+            dists.extend([1 - s for s in sims])
+        clusters = Butina.ClusterData(dists, n, cutoff, isDistData=True)
+
+        # Build scaffold map
+        scaffold_map = {}
+        for mol in mols:
+            try:
+                scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+                scaffold_map[Chem.MolToSmiles(mol)] = Chem.MolToSmiles(scaffold)
+            except Exception:
+                scaffold_map[Chem.MolToSmiles(mol)] = ""
+
+        # Assign cluster IDs
+        compound_clusters = [None] * n
+        for cluster_id, member_indices in enumerate(clusters):
+            for idx in member_indices:
+                compound_clusters[idx] = cluster_id
+
+        records = []
+        for local_i, orig_i in enumerate(valid_idx):
+            smi = smiles_list[orig_i]
+            mol_smi = Chem.MolToSmiles(mols[local_i])
+            rec = {
+                "smiles": smi,
+                "cluster_id": compound_clusters[local_i],
+                "scaffold_smiles": scaffold_map.get(mol_smi, ""),
+            }
+            if names:
+                rec["name"] = names[orig_i]
+            records.append(rec)
+
+        cluster_sizes = {}
+        for r in records:
+            cid = r["cluster_id"]
+            cluster_sizes[cid] = cluster_sizes.get(cid, 0) + 1
+
+        return json.dumps({
+            "num_clusters": len(clusters),
+            "num_compounds": len(records),
+            "cutoff": cutoff,
+            "cluster_sizes": {str(k): v for k, v in sorted(cluster_sizes.items())},
+            "compounds": records,
+        }, indent=2)
+
+    @agent.tool
+    def compute_tanimoto_matrix(
+        ctx: RunContext[ChatDeps],
+        smiles_list: list[str],
+        names: list[str] | None = None,
+    ) -> str:
+        """Compute a pairwise Tanimoto similarity matrix for a list of SMILES.
+
+        Uses Morgan fingerprints (radius=2). Returns a symmetric matrix where
+        entry [i][j] is the Tanimoto similarity between compound i and compound j.
+
+        Args:
+            smiles_list: List of SMILES strings (max 100).
+            names: Optional list of compound names for labelling rows/columns.
+
+        Returns:
+            JSON string with labels and the similarity matrix (list of lists).
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+            from rdkit import DataStructs
+        except ImportError:
+            return json.dumps({"error": "RDKit is not installed"})
+
+        smiles_list = smiles_list[:100]
+        if names and len(names) != len(smiles_list):
+            names = None
+
+        fpgen = AllChem.GetMorganGenerator(radius=2)
+        fps, labels, valid_smiles = [], [], []
+        for i, smi in enumerate(smiles_list):
+            mol = Chem.MolFromSmiles(smi)
+            if mol:
+                fps.append(fpgen.GetFingerprint(mol))
+                labels.append(names[i] if names else smi)
+                valid_smiles.append(smi)
+
+        if not fps:
+            return json.dumps({"error": "No valid SMILES provided"})
+
+        n = len(fps)
+        matrix = []
+        for i in range(n):
+            row = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
+            matrix.append([round(v, 4) for v in row])
+
+        return json.dumps({
+            "num_compounds": n,
+            "labels": labels,
+            "matrix": matrix,
+        }, indent=2)
+
+    @agent.tool
+    def predict_admet(
+        ctx: RunContext[ChatDeps],
+        smiles_list: list[str],
+        names: list[str] | None = None,
+    ) -> str:
+        """Predict ADMET (Absorption, Distribution, Metabolism, Excretion, Toxicity) properties.
+
+        Uses rule-based heuristics and RDKit's built-in PAINS/Brenk filter catalogs.
+        No external API required. Suitable for rapid triage of hit lists.
+
+        Properties predicted:
+        - GI absorption: High if RotBonds <= 10 AND TPSA <= 140 (Veber rules)
+        - BBB permeability: Likely if MW < 450, TPSA < 90, LogP in [0,5], HBD <= 3
+        - P-gp substrate: Likely if MW > 400 OR TPSA > 75
+        - CYP1A2 inhibitor: Planar aromatic amines / furans (SMARTS-based)
+        - CYP2C9 inhibitor: Acidic group + aromatic ring
+        - CYP2C19 inhibitor: Imidazole or pyridine motifs
+        - CYP2D6 inhibitor: Basic nitrogen within 2 bonds of aromatic ring
+        - CYP3A4 inhibitor: MW > 400 with >= 3 aromatic rings
+        - PAINS alerts: RDKit FilterCatalog (PAINS_A/B/C)
+        - Brenk alerts: RDKit FilterCatalog (Brenk structural alerts)
+        - Drug-likeness: Lipinski Ro5 pass/fail
+
+        Args:
+            smiles_list: List of SMILES strings (max 500).
+            names: Optional list of compound names, same length as smiles_list.
+
+        Returns:
+            JSON string with ADMET predictions for each compound.
+        """
+        try:
+            from rdkit import Chem
+            from rdkit.Chem import Descriptors
+            from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
+        except ImportError:
+            return json.dumps({"error": "RDKit is not installed"})
+
+        smiles_list = smiles_list[:500]
+        if names and len(names) != len(smiles_list):
+            names = None
+
+        # Build PAINS and Brenk filter catalogs
+        pains_params = FilterCatalogParams()
+        pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_A)
+        pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_B)
+        pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS_C)
+        pains_catalog = FilterCatalog(pains_params)
+
+        brenk_params = FilterCatalogParams()
+        brenk_params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
+        brenk_catalog = FilterCatalog(brenk_params)
+
+        # CYP inhibition SMARTS (simplified heuristics, not ML-based)
+        _CYP_SMARTS = {
+            "CYP1A2": [
+                "[nH]1cccc1",           # pyrrole
+                "c1ccc2[nH]ccc2c1",     # indole
+                "c1ccncc1N",            # aminopyridine
+                "[NH2]c1ccccc1",        # aniline
+                "o1cccc1",              # furan
+            ],
+            "CYP2C9": [
+                "[OH,O-]C(=O)",         # carboxylic acid / carboxylate
+                "S(=O)(=O)[OH,O-]",     # sulfonic acid
+                "c1ccccc1C(=O)[OH]",    # benzoic acid motif
+            ],
+            "CYP2C19": [
+                "c1cnc[nH]1",           # imidazole
+                "c1ccncc1",             # pyridine
+                "c1ncc[nH]1",           # imidazole variant
+            ],
+            "CYP2D6": [
+                "[NH,NH2,NH3+,n]~[CH2,CH]~[CH2,CH]~c1ccccc1",  # basic N near aromatic
+                "[NH,NH2]Cc1ccccc1",    # benzylamine
+            ],
+            "CYP3A4": [
+                # Handled by MW + ring count heuristic below
+            ],
+        }
+
+        compiled_cyp = {}
+        for cyp, smarts_list in _CYP_SMARTS.items():
+            compiled_cyp[cyp] = [Chem.MolFromSmarts(s) for s in smarts_list if Chem.MolFromSmarts(s)]
+
+        records = []
+        for i, smi in enumerate(smiles_list):
+            name = names[i] if names else None
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                rec = {"smiles": smi, "error": "Invalid SMILES"}
+                if name:
+                    rec["name"] = name
+                records.append(rec)
+                continue
+
+            mw = Descriptors.MolWt(mol)
+            logp = Descriptors.MolLogP(mol)
+            tpsa = Descriptors.TPSA(mol)
+            hbd = Descriptors.NumHDonors(mol)
+            hba = Descriptors.NumHAcceptors(mol)
+            rotb = Descriptors.NumRotatableBonds(mol)
+            n_aromatic_rings = Descriptors.NumAromaticRings(mol)
+
+            # Absorption
+            gi_absorption = "High" if rotb <= 10 and tpsa <= 140 else "Low"
+
+            # Distribution
+            bbb = (mw < 450 and tpsa < 90 and 0 <= logp <= 5 and hbd <= 3)
+
+            # P-gp substrate (efflux pump — reduces CNS and oral bioavailability)
+            pgp_substrate = mw > 400 or tpsa > 75
+
+            # CYP inhibition
+            cyp_flags = {}
+            for cyp, patterns in compiled_cyp.items():
+                cyp_flags[cyp] = any(mol.HasSubstructMatch(p) for p in patterns)
+            # CYP3A4: large MW + multiple aromatic rings
+            cyp_flags["CYP3A4"] = mw > 400 and n_aromatic_rings >= 3
+
+            # PAINS
+            pains_matches = pains_catalog.GetMatches(mol)
+            pains_alerts = [m.GetDescription() for m in pains_matches]
+
+            # Brenk
+            brenk_matches = brenk_catalog.GetMatches(mol)
+            brenk_alerts = [m.GetDescription() for m in brenk_matches]
+
+            # Lipinski
+            lipinski = mw <= 500 and logp <= 5 and hbd <= 5 and hba <= 10
+
+            rec = {
+                "smiles": smi,
+                "GI_absorption": gi_absorption,
+                "BBB_permeable": bbb,
+                "Pgp_substrate": pgp_substrate,
+                "CYP1A2_inhibitor": cyp_flags["CYP1A2"],
+                "CYP2C9_inhibitor": cyp_flags["CYP2C9"],
+                "CYP2C19_inhibitor": cyp_flags["CYP2C19"],
+                "CYP2D6_inhibitor": cyp_flags["CYP2D6"],
+                "CYP3A4_inhibitor": cyp_flags["CYP3A4"],
+                "PAINS_alerts": pains_alerts,
+                "Brenk_alerts": brenk_alerts,
+                "Lipinski_pass": lipinski,
+                "num_PAINS": len(pains_alerts),
+                "num_Brenk": len(brenk_alerts),
+            }
+            if name:
+                rec["name"] = name
+            records.append(rec)
+
+        # Summary counts
+        valid = [r for r in records if "error" not in r]
+        summary = {
+            "total": len(records),
+            "valid": len(valid),
+            "high_GI_absorption": sum(1 for r in valid if r["GI_absorption"] == "High"),
+            "BBB_permeable": sum(1 for r in valid if r["BBB_permeable"]),
+            "Pgp_substrate": sum(1 for r in valid if r["Pgp_substrate"]),
+            "Lipinski_pass": sum(1 for r in valid if r["Lipinski_pass"]),
+            "any_PAINS": sum(1 for r in valid if r["num_PAINS"] > 0),
+            "any_Brenk": sum(1 for r in valid if r["num_Brenk"] > 0),
+        }
+
+        return json.dumps({"summary": summary, "compounds": records}, indent=2)
 
     @agent.tool
     def run_python(ctx: RunContext[ChatDeps], code: str) -> str:

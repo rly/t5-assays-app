@@ -124,18 +124,57 @@ Four agent tools query the PubChem REST API from the main process. The sandbox b
 - *"Which of our hits have been tested in antiviral assays before? Pull their bioassay history."*
 - *"Cross-reference our top 10 compounds with PubChem — do any have known toxicity flags or PAINS alerts in the bioassay data?"*
 
+### Cheminformatics Agent Tools (local, no internet required)
+
+Four dedicated agent tools run RDKit in the main process for fast, structured cheminformatics analysis. These are faster and more reliable than writing equivalent RDKit code inside `run_python`.
+
+| Tool | Description |
+|---|---|
+| `compute_descriptors` | MW, LogP, TPSA, HBD, HBA, RotBonds, QED, and Lipinski Ro5 pass/fail for up to 500 SMILES |
+| `cluster_by_scaffold` | Murcko scaffold decomposition + Butina fingerprint clustering; returns cluster ID and scaffold SMILES per compound |
+| `compute_tanimoto_matrix` | Pairwise Morgan fingerprint Tanimoto similarity matrix for up to 100 compounds |
+| `predict_admet` | Rule-based ADMET prediction: GI absorption, BBB permeability, P-gp substrate, CYP inhibition (1A2/2C9/2C19/2D6/3A4), PAINS alerts, Brenk alerts |
+
+**Example questions:**
+
+- *"Run ADMET predictions on the top 20 hits and flag any PAINS or Brenk alerts."*
+- *"How many distinct chemical series are in the top 50 binders? Cluster by scaffold."*
+- *"Compute descriptors for all compounds and show the QED distribution."*
+- *"Which top hits are predicted to be BBB-permeable?"*
+- *"Show a Tanimoto similarity heatmap for the top 15 compounds."*
+
+**`predict_admet` details:**
+
+| Property | Method |
+|---|---|
+| GI absorption | Veber rules: RotBonds ≤ 10 AND TPSA ≤ 140 |
+| BBB permeability | MW < 450, TPSA < 90, LogP ∈ [0,5], HBD ≤ 3 |
+| P-gp substrate | MW > 400 OR TPSA > 75 |
+| CYP1A2 inhibitor | SMARTS: pyrrole, indole, aniline, furan |
+| CYP2C9 inhibitor | SMARTS: carboxylic acid / sulfonic acid + aromatic |
+| CYP2C19 inhibitor | SMARTS: imidazole, pyridine |
+| CYP2D6 inhibitor | SMARTS: basic N within 2 bonds of aromatic ring |
+| CYP3A4 inhibitor | MW > 400 AND ≥ 3 aromatic rings |
+| PAINS alerts | RDKit FilterCatalog (PAINS_A/B/C) |
+| Brenk alerts | RDKit FilterCatalog (Brenk) |
+| Lipinski Ro5 | MW ≤ 500, LogP ≤ 5, HBD ≤ 5, HBA ≤ 10 |
+
 ### Architecture
 
 ```
 Agent (LLM)
-├── run_python tool          → sandboxed subprocess (RDKit, pandas, numpy — no network)
-├── lookup_pubchem           → main process → PubChem REST API
+├── run_python tool                 → sandboxed subprocess (RDKit, pandas, numpy — no network)
+├── compute_descriptors             → main process (RDKit)
+├── cluster_by_scaffold             → main process (RDKit)
+├── compute_tanimoto_matrix         → main process (RDKit)
+├── predict_admet                   → main process (RDKit + FilterCatalog)
+├── lookup_pubchem                  → main process → PubChem REST API
 ├── search_pubchem_by_substructure  → main process → PubChem REST API
 ├── search_pubchem_by_similarity    → main process → PubChem REST API
-└── get_pubchem_bioassays    → main process → PubChem REST API
+└── get_pubchem_bioassays           → main process → PubChem REST API
 ```
 
-Typical workflow: the agent uses `run_python` to extract SMILES or CIDs from the dataset, then calls a PubChem tool with those values.
+Typical workflow: the agent uses `run_python` to extract SMILES or names from the dataset, then calls a cheminformatics or PubChem tool with those values.
 
 ## Docker
 
