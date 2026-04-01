@@ -47,6 +47,37 @@
         </button>
         <span class="tooltip-text">Detailed multi-step analysis. Uses more tokens.</span>
     </span>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Which compounds pass Lipinski'\''s Rule of Five (MW ≤ 500, LogP ≤ 5, H-bond donors ≤ 5, H-bond acceptors ≤ 10)? Use RDKit to compute these properties from the Structure column and list the passing compounds with their values."}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Drug-likeness filter
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Compute molecular weight, LogP, and TPSA for all compounds using RDKit. Plot LogP vs TPSA coloured by whether each compound passes Lipinski'\''s Rule of Five."}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        LogP vs TPSA
+    </button>
+    <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+            hx-vals='{"message": "Among the top 20 binders by the primary assay metric, compute pairwise Tanimoto fingerprint similarity using RDKit Morgan fingerprints. Which pairs are most structurally similar, and which are most diverse?"}'
+            hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+        Structural diversity
+    </button>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Look up the top 5 binders in PubChem. For each, retrieve the IUPAC name, known synonyms/trade names, and whether it has been tested in any bioassays. Use run_python to extract their SMILES, then use the lookup_pubchem and get_pubchem_bioassays tools."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            PubChem lookup
+        </button>
+        <span class="tooltip-text">Makes live requests to the PubChem database. May be slow for many compounds.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Find commercially available analogs of the top binder in PubChem. Use run_python to get its SMILES, then use search_pubchem_by_similarity with a threshold of 85 to find similar compounds. Report their names, molecular formulas, and similarity."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            Find analogs
+        </button>
+        <span class="tooltip-text">Searches PubChem for structurally similar compounds. May be slow.</span>
+    </span>
 </div>
 
 <div id="chat-messages">
