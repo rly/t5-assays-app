@@ -800,6 +800,12 @@ html, body {
     max-height: 200px;
 }
 
+.plotly-output {
+    width: 100%;
+    min-height: 400px;
+    margin-top: 0.5rem;
+}
+
 .tool-step-output pre {
     background: #f0f7ff;
     color: #333;

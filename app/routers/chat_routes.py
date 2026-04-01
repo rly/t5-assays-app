@@ -75,6 +75,12 @@ def _build_usage_html(usage_info: dict, elapsed: float = 0) -> str:
     return f'<div class="chat-usage">{pt:,} in, {ct:,} out{cost_str}{time_str}</div>'
 
 
+def _is_plotly_json(text: str) -> bool:
+    """Return True if text looks like a Plotly figure JSON (has 'data' and 'layout' keys)."""
+    s = text.strip()
+    return s.startswith("{") and '"data"' in s and '"layout"' in s
+
+
 def _build_tool_steps_html(tool_steps: list[dict]) -> str:
     if not tool_steps:
         return ""
@@ -85,22 +91,32 @@ def _build_tool_steps_html(tool_steps: list[dict]) -> str:
         step = tool_steps[i]
         if step["type"] == "call":
             step_num += 1
-            code = step.get("args", "")
+            tool_name = step.get("tool", "run_python")
+            args = step.get("args", "")
+            # For run_python, extract the code string from the args dict
+            display_args = args
             try:
-                args = json.loads(code) if isinstance(code, str) else code
-                if isinstance(args, dict) and "code" in args:
-                    code = args["code"]
+                parsed = json.loads(args) if isinstance(args, str) else args
+                if isinstance(parsed, dict) and "code" in parsed:
+                    display_args = parsed["code"]
             except (json.JSONDecodeError, TypeError):
                 pass
             output = ""
             if i + 1 < len(tool_steps) and tool_steps[i + 1]["type"] == "return":
                 output = tool_steps[i + 1].get("output", "")
                 i += 1
+            # Render Plotly JSON as an interactive chart; everything else as <pre>
+            if tool_name == "run_python" and _is_plotly_json(output):
+                import uuid
+                plot_id = f"plot-{uuid.uuid4().hex[:8]}"
+                output_html = f'<div class="plotly-output" id="{plot_id}" data-plotly="{escape(output)}"></div>'
+            else:
+                output_html = f'<pre>{escape(output)}</pre>'
             steps_html += f'''
                 <div class="tool-step">
-                    <div class="tool-step-label">Tool call {step_num}: run_python</div>
-                    <details><summary>Show code</summary><pre><code>{escape(code)}</code></pre></details>
-                    <div class="tool-step-output"><strong>Output:</strong><pre>{escape(output)}</pre></div>
+                    <div class="tool-step-label">Tool call {step_num}: {escape(tool_name)}</div>
+                    <details><summary>Show code</summary><pre><code>{escape(display_args)}</code></pre></details>
+                    <div class="tool-step-output"><strong>Output:</strong>{output_html}</div>
                 </div>
             '''
         i += 1

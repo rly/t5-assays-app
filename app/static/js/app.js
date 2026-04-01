@@ -198,6 +198,7 @@ function onChatDone(event) {
     }
 
     renderMarkdown();
+    renderPlots();
     setTimeout(scrollChat, 100);
 }
 
@@ -225,6 +226,20 @@ function escapeHtml(text) {
 
 function scrollChat() {
     window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+}
+
+function renderPlots() {
+    if (typeof Plotly === 'undefined') return;
+    document.querySelectorAll('.plotly-output[data-plotly]:not([data-rendered])').forEach(el => {
+        try {
+            const fig = JSON.parse(el.getAttribute('data-plotly'));
+            const layout = Object.assign({ margin: { t: 40, b: 60, l: 60, r: 20 } }, fig.layout || {});
+            Plotly.react(el, fig.data || [], layout, { responsive: true });
+            el.setAttribute('data-rendered', 'true');
+        } catch (e) {
+            console.error('Plotly render error:', e);
+        }
+    });
 }
 
 function renderMarkdown() {

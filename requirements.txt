@@ -16,3 +16,4 @@ httpx>=0.27.0
 pydantic-settings>=2.5.0
 pydantic-ai-slim[openrouter]>=1.72.0
 rdkit>=2025.9.6
+pubchempy>=1.0.5
