@@ -196,6 +196,20 @@ Agent (LLM)
 
 Typical workflow: the agent uses `run_python` to extract SMILES or names from the dataset, then calls a cheminformatics or external database tool with those values.
 
+## Testing
+
+End-to-end tests validate that the AI agent correctly orchestrates tool calls (run_python, compute_descriptors, PubChem lookups, critic, etc.) against a real LLM.
+
+```bash
+# Install dev dependencies
+uv sync --group dev
+
+# Run all agent E2E tests (requires OpenRouter API key)
+OPENROUTER_API_KEY=sk-... uv run pytest tests/test_agent_e2e.py -v
+```
+
+Tests default to **Gemini 3.1 Flash Lite** (`google/gemini-3.1-flash-lite-preview`) — a paid but cheap model. A full run costs fractions of a cent. Override with a `model_id` fixture if needed.
+
 ## Docker
 
 ```bash

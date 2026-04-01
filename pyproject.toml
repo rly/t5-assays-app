@@ -23,3 +23,17 @@ dependencies = [
     "pydantic-ai-slim[openrouter]>=1.72.0",
     "rdkit>=2025.9.6",
   ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0",
+    "pytest-timeout>=2.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "network: hits external APIs (PubChem, ChEMBL, BindingDB, PDB, ADMETlab)",
+    "llm: requires OPENROUTER_API_KEY env var and makes LLM calls",
+]
