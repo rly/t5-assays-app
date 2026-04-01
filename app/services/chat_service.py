@@ -889,7 +889,7 @@ async def run_critic(
             tool_name = step.get("tool", "unknown")
             output = ""
             if i + 1 < len(tool_steps) and tool_steps[i + 1]["type"] == "return":
-                output = tool_steps[i + 1].get("output", "")[:1500]
+                output = tool_steps[i + 1].get("output", "")
                 i += 1
             tool_parts.append(f"[Tool {step_num}: {tool_name}]\n{output}")
         i += 1
