@@ -21,6 +21,31 @@ from app.services.sandbox_service import execute_code
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 MAX_RECENT_MESSAGES = 6
 
+CRITIC_SYSTEM_PROMPT = """You are a scientific reasoning critic reviewing an AI assistant's drug discovery data analysis response.
+
+Your job: check the AI response against the actual tool outputs and flag problems.
+
+Look for:
+1. Numerical claims not supported by any tool output (hallucinations)
+2. Internal contradictions (e.g., compound ranked differently in two places)
+3. Conclusions that don't follow from the data shown
+4. Important missing caveats (data quality, small sample size, assay limitations)
+
+Respond ONLY with valid JSON in this exact format — no prose, no markdown fences:
+{
+  "verdict": "Pass" | "Minor issues" | "Significant issues",
+  "issues": ["specific issue 1", "specific issue 2"],
+  "caveats_missing": ["missing caveat 1"],
+  "confidence_assessment": "One sentence summary of response reliability."
+}
+
+Rules:
+- "Pass": response is well-supported and accurate
+- "Minor issues": small inaccuracies or missing caveats, but overall sound
+- "Significant issues": major hallucinations or unsupported claims
+- Keep each issue to one sentence
+- Return empty arrays [] if no issues or caveats are found"""
+
 # Cache of model pricing: {model_id: {"prompt": float, "completion": float}}
 _model_pricing: dict[str, dict[str, float]] = {}
 
@@ -834,6 +859,65 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
     return agent
 
 
+async def run_critic(
+    api_key: str,
+    model_id: str,
+    user_message: str,
+    tool_steps: list[dict],
+    primary_response: str,
+) -> dict | None:
+    """Run a lightweight critic agent to review the primary agent's response.
+
+    Checks for hallucinations, unsupported claims, contradictions, and missing caveats.
+    Only runs when the primary agent made at least one tool call (so there is ground-truth
+    computed output to verify against).
+
+    Returns a dict with keys: verdict, issues, caveats_missing, confidence_assessment.
+    Returns None if the critic fails or there are no tool calls to verify.
+    """
+    if not tool_steps:
+        return None
+
+    # Build a compact summary of tool calls + outputs (cap length to control tokens)
+    tool_parts: list[str] = []
+    i = 0
+    step_num = 0
+    while i < len(tool_steps):
+        step = tool_steps[i]
+        if step["type"] == "call":
+            step_num += 1
+            tool_name = step.get("tool", "unknown")
+            output = ""
+            if i + 1 < len(tool_steps) and tool_steps[i + 1]["type"] == "return":
+                output = tool_steps[i + 1].get("output", "")[:1500]
+                i += 1
+            tool_parts.append(f"[Tool {step_num}: {tool_name}]\n{output}")
+        i += 1
+
+    tool_summary = "\n\n".join(tool_parts)
+    critic_prompt = (
+        f"USER QUESTION:\n{user_message[:500]}\n\n"
+        f"TOOL OUTPUTS:\n{tool_summary}\n\n"
+        f"AI RESPONSE:\n{primary_response[:3000]}\n\n"
+        "Review and respond with JSON only."
+    )
+
+    try:
+        model = OpenRouterModel(model_id, provider=OpenRouterProvider(api_key=api_key))
+        critic_agent = Agent(model, output_type=str)
+        result = await critic_agent.run(critic_prompt, instructions=CRITIC_SYSTEM_PROMPT)
+        raw = result.output.strip()
+        # Strip markdown code fences if the model wraps the JSON
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.split("```")[0].strip()
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 async def run_agent_chat(
     api_key: str, model_id: str, system_prompt: str,
     conversation_messages: list[dict], user_message: str,
@@ -915,7 +999,12 @@ async def run_agent_chat(
                         "output": str(part.content),
                     })
 
-    return {"content": content, "usage": usage_info, "tool_steps": tool_steps, "elapsed": elapsed}
+    # Run critic when the primary agent made tool calls (ground-truth outputs exist to verify)
+    critique: dict | None = None
+    if tool_steps:
+        critique = await run_critic(api_key, model_id, user_message, tool_steps, content)
+
+    return {"content": content, "usage": usage_info, "tool_steps": tool_steps, "elapsed": elapsed, "critique": critique}
 
 
 

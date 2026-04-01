@@ -130,11 +130,60 @@ def _build_tool_steps_html(tool_steps: list[dict]) -> str:
     '''
 
 
+def _build_critique_html(critique: dict | None) -> str:
+    """Render the collapsible AI self-review section from a critic-agent result dict."""
+    if not critique:
+        return ""
+
+    verdict = critique.get("verdict", "")
+    issues = critique.get("issues", [])
+    caveats = critique.get("caveats_missing", [])
+    confidence = critique.get("confidence_assessment", "")
+
+    if not verdict:
+        return ""
+
+    verdict_class = {
+        "Pass": "critique-pass",
+        "Minor issues": "critique-minor",
+        "Significant issues": "critique-significant",
+    }.get(verdict, "critique-minor")
+
+    verdict_icon = {
+        "Pass": "✓",
+        "Minor issues": "⚠",
+        "Significant issues": "✗",
+    }.get(verdict, "?")
+
+    body_parts = []
+    if issues:
+        items = "".join(f"<li>{escape(issue)}</li>" for issue in issues)
+        body_parts.append(f"<p><strong>Issues:</strong></p><ul>{items}</ul>")
+    if caveats:
+        items = "".join(f"<li>{escape(c)}</li>" for c in caveats)
+        body_parts.append(f"<p><strong>Missing caveats:</strong></p><ul>{items}</ul>")
+    if not issues and not caveats:
+        body_parts.append("<p>No issues found. The response appears well-supported by the computed data.</p>")
+    if confidence:
+        body_parts.append(f'<p class="critique-confidence"><em>{escape(confidence)}</em></p>')
+
+    body_html = "\n".join(body_parts)
+
+    return f'''
+        <details class="critique-section {verdict_class}">
+            <summary>🔍 AI self-review <span class="critique-verdict-badge">{verdict_icon} {escape(verdict)}</span></summary>
+            <div class="critique-body">{body_html}</div>
+        </details>
+    '''
+
+
 def _build_response_html(model_id: str, content: str, usage_info: dict,
-                         tool_steps: list[dict] = None, elapsed: float = 0) -> str:
+                         tool_steps: list[dict] = None, elapsed: float = 0,
+                         critique: dict | None = None) -> str:
     model_label = MODEL_DISPLAY_NAMES.get(model_id, model_id)
     usage_html = _build_usage_html(usage_info, elapsed)
     tool_html = _build_tool_steps_html(tool_steps or [])
+    critique_html = _build_critique_html(critique)
     has_tools = any(s.get("type") == "call" for s in (tool_steps or []))
     computed_badge = '<span class="computed-badge">Computed via Python</span>' if has_tools else ""
     return f'''
@@ -142,6 +191,7 @@ def _build_response_html(model_id: str, content: str, usage_info: dict,
             <div class="chat-msg-header">{model_label}{computed_badge}{" &middot; " + usage_html if usage_html else ""}</div>
             {tool_html}
             <div class="chat-msg-body"><div class="markdown-content">{content}</div></div>
+            {critique_html}
         </div>
     '''
 
@@ -207,12 +257,13 @@ async def _handle_chat(db, conv, existing_messages, message, api_key, model_id, 
     usage_info = result["usage"]
     tool_steps = result.get("tool_steps", [])
     elapsed = result.get("elapsed", 0)
+    critique = result.get("critique")
 
     save_message(db, conv.id, "assistant", full_response,
                  model_used=model_id, tokens=usage_info.get("total_tokens"), cost=usage_info.get("cost"))
 
     conv_tokens, conv_cost = get_conversation_stats(db, conv.id)
-    return full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed
+    return full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed, critique
 
 
 @router.post("/send", response_class=HTMLResponse)
@@ -239,12 +290,12 @@ async def send_message(request: Request, message: str = Form(...),
         conv = get_or_create_conversation(db, user.id)
         existing_messages = get_chat_messages(db, conv.id)
 
-        full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed = await _handle_chat(
+        full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed, critique = await _handle_chat(
             db, conv, existing_messages, message, api_key, model_id, datasets,
         )
 
         return HTMLResponse(
-            _build_response_html(model_id, full_response, usage_info, tool_steps, elapsed)
+            _build_response_html(model_id, full_response, usage_info, tool_steps, elapsed, critique)
             + _build_session_oob(conv_tokens, conv_cost)
         )
     except Exception as e:
@@ -275,7 +326,7 @@ async def summarize(user: User = Depends(get_current_user), db: Session = Depend
         conv = get_or_create_conversation(db, user.id)
         existing_messages = get_chat_messages(db, conv.id)
 
-        full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed = await _handle_chat(
+        full_response, usage_info, tool_steps, conv_tokens, conv_cost, elapsed, critique = await _handle_chat(
             db, conv, existing_messages, prompt, api_key, model_id, datasets,
         )
 
@@ -284,7 +335,7 @@ async def summarize(user: User = Depends(get_current_user), db: Session = Depend
                 <div class="chat-msg-header">You</div>
                 <div class="chat-msg-body">{prompt}</div>
             </div>
-            {_build_response_html(model_id, full_response, usage_info, tool_steps, elapsed)}
+            {_build_response_html(model_id, full_response, usage_info, tool_steps, elapsed, critique)}
             {_build_session_oob(conv_tokens, conv_cost)}
         ''')
     except Exception as e:

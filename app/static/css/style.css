@@ -812,6 +812,99 @@ html, body {
     border: 1px solid #b3d4fc;
 }
 
+/* AI self-review / critique section */
+.critique-section {
+    margin-top: 0.6rem;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    border: 1px solid var(--pico-muted-border-color);
+    padding: 0.4rem 0.6rem;
+}
+
+.critique-section > summary {
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    list-style: none;
+}
+
+.critique-section > summary::-webkit-details-marker { display: none; }
+
+.critique-section > summary::before {
+    content: "▶";
+    font-size: 0.6rem;
+    transition: transform 0.15s;
+}
+
+.critique-section[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.critique-section > summary:hover {
+    color: var(--pico-primary);
+}
+
+.critique-pass {
+    border-color: #a5d6a7;
+    background: #f1f8f1;
+}
+
+.critique-pass > summary { color: #2e7d32; }
+
+.critique-minor {
+    border-color: #ffe082;
+    background: #fffde7;
+}
+
+.critique-minor > summary { color: #f57f17; }
+
+.critique-significant {
+    border-color: #ef9a9a;
+    background: #fff5f5;
+}
+
+.critique-significant > summary { color: #c62828; }
+
+.critique-verdict-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.critique-body {
+    margin-top: 0.4rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    color: #333;
+    line-height: 1.5;
+}
+
+.critique-body ul {
+    margin: 0.25rem 0 0.25rem 1.2rem;
+    padding: 0;
+}
+
+.critique-body li {
+    margin-bottom: 0.2rem;
+}
+
+.critique-body p {
+    margin: 0.25rem 0;
+    font-size: 0.75rem;
+}
+
+.critique-confidence {
+    color: var(--pico-muted-color) !important;
+    font-size: 0.7rem !important;
+    margin-top: 0.3rem !important;
+}
+
 /* Loading indicator */
 .chat-loading {
     display: flex;
