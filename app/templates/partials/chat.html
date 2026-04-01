@@ -137,8 +137,8 @@
 <form id="chat-form" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
       hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
     <div class="chat-input-row">
-        <input type="text" id="chat-input" name="message" placeholder="Ask a question about the data..."
-               autocomplete="off" required>
+        <textarea id="chat-input" name="message" placeholder="Ask a question about the data..."
+                  rows="3" autocomplete="off" required></textarea>
         <button type="submit" id="chat-submit-btn">Send</button>
     </div>
 </form>

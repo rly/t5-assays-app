@@ -127,6 +127,19 @@ function onDatasetView(datasetKey) {
     }, 50);
 }
 
+// Submit chat on Enter (Shift+Enter for newline)
+document.addEventListener("DOMContentLoaded", function() {
+    const ta = document.getElementById("chat-input");
+    if (ta) {
+        ta.addEventListener("keydown", function(e) {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                document.getElementById("chat-form").requestSubmit();
+            }
+        });
+    }
+});
+
 // Chat functions
 function onChatSend(event) {
     const input = document.getElementById("chat-input");

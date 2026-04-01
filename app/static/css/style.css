@@ -712,16 +712,20 @@ html, body {
 .chat-input-row {
     display: flex;
     gap: 0.5rem;
-    align-items: stretch;
+    align-items: flex-end;
 }
 
-.chat-input-row input {
+.chat-input-row textarea {
     flex: 1;
     margin-bottom: 0;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
-    height: auto;
-    min-height: 2.5rem;
+    resize: vertical;
+    min-height: 4.5rem;
+    max-height: 12rem;
+    overflow-y: auto;
+    font-family: inherit;
+    line-height: 1.4;
     width: auto;
 }
 
