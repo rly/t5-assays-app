@@ -61,6 +61,16 @@ PUBCHEM_PROPS = (
     "XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount"
 )
 
+# ---------------------------------------------------------------------------
+# External database API constants
+# ---------------------------------------------------------------------------
+CHEMBL_BASE = "https://www.ebi.ac.uk/chembl/api/data"
+CHEMBL_TIMEOUT = 30.0
+BINDINGDB_BASE = "https://bindingdb.org/rest/json"
+ADMETLAB_BASE = "https://admetlab3.scbdd.com/api"
+PDB_DATA_URL = "https://data.rcsb.org/rest/v1/core"
+PDB_SEARCH_URL = "https://search.rcsb.org/rcsbsearch/v2/query"
+
 
 async def _pubchem_resolve_cid(
     client: httpx.AsyncClient, identifier: str, identifier_type: str
@@ -379,6 +389,32 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "   Use for: prior art, PAINS/frequent hitter detection, target selectivity profiling.\n\n"
         "Workflow: use run_python to extract SMILES/names from the dataset, then call PubChem tools.\n"
         "Do NOT use pubchempy or make network requests inside run_python.\n\n"
+        "EXTERNAL DATABASE TOOLS:\n"
+        "Four additional tools query specialized databases to enrich compound context for non-experts.\n\n"
+        "1. `search_chembl(smiles, similarity=70, max_results=20)`\n"
+        "   Find ChEMBL compounds similar to a query SMILES. Returns ChEMBL ID, name, similarity,\n"
+        "   molecular properties, and max_phase (clinical development stage: 0=preclinical, 4=approved).\n"
+        "   Use to answer: 'Has anything like this been tested before? Is it a known drug?'\n\n"
+        "2. `get_chembl_activities(chembl_id, max_results=20)`\n"
+        "   Get bioassay activities for a ChEMBL ID. Returns target name, organism, activity type\n"
+        "   (IC50/Ki/Kd/EC50), value, units, and pChEMBL value (-log10 of activity in M).\n"
+        "   Use after search_chembl to get detailed bioactivity data for a specific compound.\n\n"
+        "3. `predict_admet_ml(smiles_list, names=None)`\n"
+        "   ML-based ADMET predictions from ADMETlab 3.0 (max 20 SMILES per call).\n"
+        "   More accurate than rule-based heuristics for novel scaffolds.\n"
+        "   Use to flag safety concerns (hERG, solubility, bioavailability) for hit compounds.\n\n"
+        "4. `search_bindingdb(smiles, similarity_cutoff=80, max_results=20)`\n"
+        "   Find similar compounds in BindingDB with protein binding affinity data (Kd/Ki/IC50/EC50).\n"
+        "   BindingDB specializes in protein-ligand binding data from peer-reviewed literature.\n"
+        "   Use to find prior binding data for compounds similar to your hits.\n\n"
+        "5. `search_pdb(query, max_results=10)`\n"
+        "   Search the Protein Data Bank for structures by name or keyword.\n"
+        "   Returns PDB IDs, titles, resolution, and experimental method with direct RCSB links.\n"
+        "   Use to find crystal structures of the VEEV macrodomain or related alphavirus targets.\n\n"
+        "6. `get_pdb_ligands(pdb_id)`\n"
+        "   Get all non-polymer ligands (small molecules, inhibitors) from a specific PDB structure.\n"
+        "   Returns ligand names, formulas, type, and SMILES where available.\n"
+        "   Use to understand what types of molecules bind to the macrodomain target.\n\n"
         f"Data context:\n{data_context}\n\n"
         "Answer questions accurately. Highlight key findings and actionable insights."
     )
@@ -577,6 +613,376 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
             return json.dumps({"cid": cid, "assay_count": len(rows), "assays": records}, indent=2)
         except Exception as e:
             return json.dumps({"cid": cid, "error": str(e)})
+
+    # -----------------------------------------------------------------------
+    # ChEMBL tools
+    # -----------------------------------------------------------------------
+
+    @agent.tool
+    async def search_chembl(
+        ctx: RunContext[ChatDeps],
+        smiles: str,
+        similarity: int = 70,
+        max_results: int = 20,
+    ) -> str:
+        """Search ChEMBL for compounds similar to a SMILES string.
+
+        ChEMBL is the gold-standard curated database of bioactivity data from
+        peer-reviewed literature. Returns similar compounds with ChEMBL IDs,
+        names, molecular properties, and clinical development stage (max_phase).
+        Follow up with get_chembl_activities to get detailed bioassay records.
+
+        Args:
+            smiles: SMILES string of the query compound.
+            similarity: Tanimoto similarity threshold (0-100, default 70).
+            max_results: Maximum number of results (default 20, max 50).
+
+        Returns:
+            JSON with similar ChEMBL compounds and their properties.
+        """
+        similarity = max(0, min(100, similarity))
+        max_results = min(max_results, 50)
+        try:
+            encoded = quote(smiles, safe="")
+            async with httpx.AsyncClient(timeout=CHEMBL_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{CHEMBL_BASE}/similarity/{encoded}/{similarity}",
+                    params={"format": "json", "limit": max_results},
+                )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"ChEMBL similarity search failed (HTTP {resp.status_code})"})
+            molecules = resp.json().get("molecules", [])
+            results = []
+            for mol in molecules:
+                props = mol.get("molecule_properties") or {}
+                results.append({
+                    "chembl_id": mol.get("molecule_chembl_id"),
+                    "name": mol.get("pref_name"),
+                    "similarity": mol.get("similarity"),
+                    "smiles": (mol.get("molecule_structures") or {}).get("canonical_smiles"),
+                    "mw": props.get("mw_freebase"),
+                    "alogp": props.get("alogp"),
+                    "hbd": props.get("hbd"),
+                    "hba": props.get("hba"),
+                    "ro5_violations": props.get("num_ro5_violations"),
+                    "max_phase": mol.get("max_phase"),
+                    "molecule_type": mol.get("molecule_type"),
+                })
+            return json.dumps({
+                "query_smiles": smiles,
+                "similarity_threshold": similarity,
+                "count": len(results),
+                "compounds": results,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    @agent.tool
+    async def get_chembl_activities(
+        ctx: RunContext[ChatDeps],
+        chembl_id: str,
+        max_results: int = 20,
+    ) -> str:
+        """Get bioassay activities for a ChEMBL compound ID.
+
+        Returns assay records including target name, organism, activity type
+        (IC50, Ki, Kd, EC50), activity value, pChEMBL value (-log10 of activity
+        in molar), and assay description. Results are ordered by pChEMBL value
+        (most potent first).
+
+        Args:
+            chembl_id: ChEMBL compound ID (e.g., 'CHEMBL12345').
+            max_results: Maximum number of activity records (default 20).
+
+        Returns:
+            JSON with bioassay activity records for the compound.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=CHEMBL_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{CHEMBL_BASE}/activity",
+                    params={
+                        "format": "json",
+                        "molecule_chembl_id": chembl_id,
+                        "limit": max_results,
+                        "order_by": "-pchembl_value",
+                    },
+                )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"ChEMBL activity fetch failed (HTTP {resp.status_code})"})
+            data = resp.json()
+            activities = data.get("activities", [])
+            results = []
+            for act in activities:
+                results.append({
+                    "target_name": act.get("target_pref_name"),
+                    "target_organism": act.get("target_organism"),
+                    "activity_type": act.get("standard_type"),
+                    "activity_value": act.get("standard_value"),
+                    "activity_units": act.get("standard_units"),
+                    "pchembl_value": act.get("pchembl_value"),
+                    "assay_description": act.get("assay_description"),
+                    "document_year": act.get("document_year"),
+                    "assay_chembl_id": act.get("assay_chembl_id"),
+                })
+            return json.dumps({
+                "chembl_id": chembl_id,
+                "total_activities": data.get("page_meta", {}).get("total_count", len(results)),
+                "activities": results,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"chembl_id": chembl_id, "error": str(e)})
+
+    # -----------------------------------------------------------------------
+    # ADMETlab 3.0 tool
+    # -----------------------------------------------------------------------
+
+    @agent.tool
+    async def predict_admet_ml(
+        ctx: RunContext[ChatDeps],
+        smiles_list: list[str],
+        names: list[str] | None = None,
+    ) -> str:
+        """Predict ADMET properties using ML models from ADMETlab 3.0.
+
+        Provides ML-based predictions for key drug-likeness and safety endpoints.
+        More accurate than rule-based heuristics for novel scaffolds. Use to flag
+        safety concerns (hERG cardiotoxicity, solubility, bioavailability) for
+        hit compounds before prioritizing them for follow-up.
+
+        Args:
+            smiles_list: List of SMILES strings (max 20 per call).
+            names: Optional list of compound names, same length as smiles_list.
+
+        Returns:
+            JSON with ML-predicted ADMET properties for each compound.
+            If the API is unavailable, falls back to an error message per compound.
+        """
+        smiles_list = smiles_list[:20]
+        if names and len(names) != len(smiles_list):
+            names = None
+        results = []
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                for i, smi in enumerate(smiles_list):
+                    name = names[i] if names else None
+                    try:
+                        resp = await client.post(
+                            f"{ADMETLAB_BASE}/predict",
+                            json={"smiles": smi},
+                            headers={"Content-Type": "application/json"},
+                        )
+                        rec: dict = {"smiles": smi}
+                        if name:
+                            rec["name"] = name
+                        if resp.status_code == 200:
+                            rec["predictions"] = resp.json()
+                        else:
+                            rec["error"] = f"HTTP {resp.status_code}"
+                        results.append(rec)
+                    except Exception as e:
+                        rec = {"smiles": smi, "error": str(e)}
+                        if name:
+                            rec["name"] = name
+                        results.append(rec)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+        return json.dumps({"count": len(results), "compounds": results}, indent=2)
+
+    # -----------------------------------------------------------------------
+    # BindingDB tool
+    # -----------------------------------------------------------------------
+
+    @agent.tool
+    async def search_bindingdb(
+        ctx: RunContext[ChatDeps],
+        smiles: str,
+        similarity_cutoff: int = 80,
+        max_results: int = 20,
+    ) -> str:
+        """Search BindingDB for compounds similar to a SMILES string with binding data.
+
+        BindingDB specializes in protein-ligand binding affinities (Kd, Ki, IC50, EC50)
+        from peer-reviewed literature. Particularly useful for finding prior binding data
+        against macrodomains and related viral targets.
+
+        Args:
+            smiles: SMILES string of the query compound.
+            similarity_cutoff: Tanimoto similarity cutoff (0-100, default 80).
+            max_results: Maximum number of results (default 20).
+
+        Returns:
+            JSON with similar compounds and their protein binding affinities.
+        """
+        try:
+            cutoff_decimal = max(0.0, min(1.0, similarity_cutoff / 100.0))
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{BINDINGDB_BASE}/getLigandsBySmiles",
+                    params={
+                        "smiles": smiles,
+                        "cutoff": cutoff_decimal,
+                        "response": "application/json",
+                    },
+                )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"BindingDB search failed (HTTP {resp.status_code})"})
+            affinities = resp.json().get("affinities", [])[:max_results]
+            results = []
+            for aff in affinities:
+                results.append({
+                    "bindingdb_id": aff.get("monomerid"),
+                    "smiles": aff.get("smile"),
+                    "target_name": aff.get("target_name"),
+                    "target_source": aff.get("target_source"),
+                    "affinity_type": aff.get("affinity_type"),
+                    "affinity_value": aff.get("affinity"),
+                    "affinity_units": aff.get("affinity_unit"),
+                    "pubmed_id": aff.get("pmid"),
+                    "doi": aff.get("doi"),
+                })
+            return json.dumps({
+                "query_smiles": smiles,
+                "similarity_cutoff": similarity_cutoff,
+                "count": len(results),
+                "affinities": results,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    # -----------------------------------------------------------------------
+    # PDB tools
+    # -----------------------------------------------------------------------
+
+    @agent.tool
+    async def search_pdb(
+        ctx: RunContext[ChatDeps],
+        query: str,
+        max_results: int = 10,
+    ) -> str:
+        """Search the Protein Data Bank (PDB) for protein structures by name or keyword.
+
+        Use to find crystal structures of the VEEV macrodomain or related alphavirus /
+        coronavirus macrodomains. Returns PDB IDs, titles, resolution, experimental
+        method, and deposition date.
+
+        Args:
+            query: Search term (e.g., 'VEEV macrodomain', 'alphavirus nsP3 macrodomain').
+            max_results: Maximum number of results (default 10).
+
+        Returns:
+            JSON with matching PDB entries and their metadata.
+        """
+        try:
+            search_body = {
+                "query": {
+                    "type": "terminal",
+                    "service": "full_text",
+                    "parameters": {"value": query},
+                },
+                "return_type": "entry",
+                "request_options": {
+                    "paginate": {"start": 0, "rows": max_results},
+                    "sort": [{"sort_by": "score", "direction": "desc"}],
+                },
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    PDB_SEARCH_URL,
+                    json=search_body,
+                    headers={"Content-Type": "application/json"},
+                )
+                if resp.status_code != 200:
+                    return json.dumps({"error": f"PDB search failed (HTTP {resp.status_code})"})
+                data = resp.json()
+                pdb_ids = [r["identifier"] for r in data.get("result_set", [])[:max_results]]
+
+                entries = []
+                for pdb_id in pdb_ids:
+                    try:
+                        entry_resp = await client.get(f"{PDB_DATA_URL}/entry/{pdb_id}")
+                        if entry_resp.status_code == 200:
+                            entry = entry_resp.json()
+                            exptl = (entry.get("exptl") or [{}])[0]
+                            refine = (entry.get("refine") or [{}])[0]
+                            entries.append({
+                                "pdb_id": pdb_id,
+                                "title": (entry.get("struct") or {}).get("title"),
+                                "method": exptl.get("method"),
+                                "resolution_angstrom": refine.get("ls_d_res_high"),
+                                "deposition_date": (entry.get("rcsb_accession_info") or {}).get("deposit_date"),
+                                "pdb_url": f"https://www.rcsb.org/structure/{pdb_id}",
+                            })
+                        else:
+                            entries.append({"pdb_id": pdb_id, "error": "Could not fetch details"})
+                    except Exception:
+                        entries.append({"pdb_id": pdb_id, "error": "Could not fetch details"})
+
+            return json.dumps({
+                "query": query,
+                "total_found": data.get("total_count", len(pdb_ids)),
+                "entries": entries,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    @agent.tool
+    async def get_pdb_ligands(
+        ctx: RunContext[ChatDeps],
+        pdb_id: str,
+    ) -> str:
+        """Get ligand/small molecule information from a specific PDB structure.
+
+        Returns all non-polymer ligands (small molecules, cofactors, inhibitors) bound
+        in the structure, with chemical names, formulas, type, and SMILES where available.
+        Useful for understanding what types of molecules bind to the macrodomain target.
+
+        Args:
+            pdb_id: PDB entry ID (e.g., '7LYJ', '6WOJ').
+
+        Returns:
+            JSON with ligand details from the PDB structure.
+        """
+        pdb_id = pdb_id.upper().strip()
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                entry_resp = await client.get(f"{PDB_DATA_URL}/entry/{pdb_id}")
+                if entry_resp.status_code != 200:
+                    return json.dumps({"pdb_id": pdb_id, "error": f"PDB entry not found (HTTP {entry_resp.status_code})"})
+                entry = entry_resp.json()
+                entry_info = entry.get("rcsb_entry_info") or {}
+                nonpoly_count = entry_info.get("nonpolymer_entity_count", 0)
+
+                ligands = []
+                for entity_id in range(1, nonpoly_count + 1):
+                    try:
+                        np_resp = await client.get(
+                            f"{PDB_DATA_URL}/nonpolymer_entity/{pdb_id}/{entity_id}"
+                        )
+                        if np_resp.status_code == 200:
+                            np_data = np_resp.json()
+                            chem = np_data.get("chem_comp") or {}
+                            desc = np_data.get("pdbx_entity_nonpoly") or {}
+                            ligands.append({
+                                "comp_id": chem.get("id"),
+                                "name": chem.get("name"),
+                                "formula": chem.get("formula"),
+                                "type": chem.get("type"),
+                                "smiles": chem.get("pdbx_smiles"),
+                                "entity_name": desc.get("name"),
+                            })
+                    except Exception:
+                        pass
+
+            return json.dumps({
+                "pdb_id": pdb_id,
+                "title": (entry.get("struct") or {}).get("title"),
+                "pdb_url": f"https://www.rcsb.org/structure/{pdb_id}",
+                "nonpolymer_entity_count": nonpoly_count,
+                "ligands": ligands,
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({"pdb_id": pdb_id, "error": str(e)})
 
     @agent.tool
     def compute_descriptors(

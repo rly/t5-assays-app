@@ -7,9 +7,9 @@ Web application for exploring alphaviral macrodomain assay data with AI-powered 
 - **Data browsing** -- Interactive AG Grid table with sorting, filtering, and column pinning. Loads data from Google Sheets via service account.
 - **Data merging** -- Merges PEITHO (SPR + AI docking) and PARG (FP + AI docking) datasets automatically.
 - **Correlation plots** -- Plotly scatter plots with OLS trendlines for key assay comparisons.
-- **AI chat** -- Ask questions about the data using OpenRouter models. The AI can execute Python code (pandas/numpy/RDKit) against the dataset to compute answers.
-- **Tool calling** -- Pydantic AI handles the agentic loop: the model calls `run_python` and PubChem tools, sees results, and can iterate.
-- **Cheminformatics** -- RDKit runs inside the sandboxed Python environment for local molecular analysis. Async `httpx` calls to the PubChem REST API run in the main process as dedicated agent tools for live database queries (no `pubchempy` dependency).
+- **AI chat** -- Ask questions about the data using OpenRouter models. Pydantic AI handles the agentic loop: the model calls tools, sees results, and can iterate. Supports code execution (pandas/numpy/RDKit) and 14 specialised tools.
+- **Cheminformatics** -- RDKit available in two modes: sandboxed `run_python` for flexible custom analysis and plotting; four dedicated agent tools in the main process for fast, structured descriptors, scaffold clustering, Tanimoto matrices, and ADMET prediction.
+- **External databases** -- Ten agent tools query PubChem, ChEMBL, BindingDB, ADMETlab 3.0, and the RCSB Protein Data Bank for compound metadata, bioassay history, protein-ligand binding affinities, ML-based ADMET predictions, and macrodomain crystal structures. All use async `httpx` with no third-party client libraries.
 - **Cost tracking** -- Per-message and per-conversation token counts and estimated costs.
 - **Authentication** -- Simple email/password login with encrypted session cookies.
 
@@ -90,43 +90,27 @@ app/
 
 ## Cheminformatics Integration
 
-### RDKit (local, no internet required)
+The app provides two tiers of cheminformatics capability:
 
-RDKit is pre-loaded in the sandboxed `run_python` environment. The AI can use it directly in Python code alongside pandas for molecular analysis of the `Structure` (SMILES) column.
+- **Local (no internet):** RDKit in a sandboxed `run_python` subprocess for flexible custom analysis, and four dedicated agent tools in the main process for fast, structured tasks.
+- **External (live queries):** Ten agent tools reach PubChem, ChEMBL, BindingDB, ADMETlab 3.0, and the RCSB PDB. The sandbox blocks all network access; only these trusted tools can reach the internet.
 
-**Example questions:**
+### Local Cheminformatics (RDKit)
 
-- *"Which compounds pass Lipinski's Rule of Five?"*
-- *"Compute molecular weight, LogP, and TPSA for all compounds and show the distribution."*
-- *"Find all compounds containing a benzimidazole scaffold."*
-- *"Cluster the top 20 hits by Tanimoto fingerprint similarity and show a heatmap."*
-- *"Which compounds have the highest SPR binding affinity AND are drug-like (MW < 500, LogP < 5)?"*
+#### `run_python` — flexible custom analysis
+
+RDKit is pre-loaded alongside pandas and numpy in the sandboxed subprocess. Use this for custom plots, multi-step pandas pipelines, or any analysis not covered by the dedicated tools below.
+
+**Best for:**
+
 - *"Plot LogP vs TPSA for all compounds, coloured by whether they pass the Rule of Five."*
+- *"Which compounds have the highest SPR binding affinity AND are drug-like (MW < 500, LogP < 5)?"*
+- *"Find all compounds containing a benzimidazole scaffold and show their SPR KD distribution."*
 - *"What is the most common ring system among the active compounds?"*
 
-### PubChem Tools (live database queries)
+#### Dedicated agent tools — fast, structured results
 
-Four agent tools query the PubChem REST API from the main process. The sandbox blocks all network access, so only these trusted tools can reach the internet.
-
-| Tool | Description |
-|---|---|
-| `lookup_pubchem` | Fetch metadata (IUPAC name, synonyms, MW, LogP, TPSA, CID) for a list of SMILES, names, or CIDs (max 20 — CID resolution is sequential, one request per identifier) |
-| `search_pubchem_by_substructure` | Find all PubChem compounds containing a SMARTS substructure |
-| `search_pubchem_by_similarity` | Find analogs by Tanimoto similarity threshold (0–100%) |
-| `get_pubchem_bioassays` | Retrieve bioassay activity history for a compound CID |
-
-**Example questions:**
-
-- *"What are the IUPAC names and known trade names for our top 5 hits?"*
-- *"Have any of our active compounds been previously reported in PubChem bioassays?"*
-- *"Find commercially available analogs of our best SPR hit with ≥ 85% Tanimoto similarity."*
-- *"Search PubChem for all known compounds containing the macrodomain-binding scaffold from compound X."*
-- *"Which of our hits have been tested in antiviral assays before? Pull their bioassay history."*
-- *"Cross-reference our top 10 compounds with PubChem — do any have known toxicity flags or PAINS alerts in the bioassay data?"*
-
-### Cheminformatics Agent Tools (local, no internet required)
-
-Four dedicated agent tools run RDKit in the main process for fast, structured cheminformatics analysis. These are faster and more reliable than writing equivalent RDKit code inside `run_python`.
+Four agent tools run RDKit in the main process. Prefer these over `run_python` for the specific tasks they cover — they are faster, return structured data, and handle edge cases (invalid SMILES, large batches) more robustly.
 
 | Tool | Description |
 |---|---|
@@ -159,6 +143,36 @@ Four dedicated agent tools run RDKit in the main process for fast, structured ch
 | Brenk alerts | RDKit FilterCatalog (Brenk) |
 | Lipinski Ro5 | MW ≤ 500, LogP ≤ 5, HBD ≤ 5, HBA ≤ 10 |
 
+### External Database Tools (live queries)
+
+Ten agent tools query external databases to enrich compound context. All use async `httpx` with no third-party client libraries.
+
+| Tool | Database | Description |
+|---|---|---|
+| `lookup_pubchem` | PubChem | Fetch metadata (IUPAC name, synonyms, MW, LogP, TPSA, CID) for a list of SMILES, names, or CIDs |
+| `search_pubchem_by_substructure` | PubChem | Find all PubChem compounds containing a SMARTS substructure |
+| `search_pubchem_by_similarity` | PubChem | Find analogs by Tanimoto similarity threshold (0–100%) |
+| `get_pubchem_bioassays` | PubChem | Retrieve bioassay activity history for a compound CID |
+| `search_chembl` | ChEMBL | Find similar compounds by SMILES (Tanimoto threshold). Returns ChEMBL ID, name, `max_phase` (clinical stage 0–4), and Ro5 properties |
+| `get_chembl_activities` | ChEMBL | Curated bioassay records for a ChEMBL ID: target, organism, IC50/Ki/Kd/EC50, pChEMBL value (−log₁₀ M), ordered most-potent first |
+| `predict_admet_ml` | ADMETlab 3.0 | ML-based ADMET predictions (hERG, solubility, bioavailability) — more accurate than rule-based heuristics for novel scaffolds |
+| `search_bindingdb` | BindingDB | Find similar compounds with protein-ligand binding affinities (Kd/Ki/IC50/EC50) from peer-reviewed literature |
+| `search_pdb` | RCSB PDB | Search for crystal structures by keyword; returns PDB IDs, titles, resolution, method, and direct RCSB links |
+| `get_pdb_ligands` | RCSB PDB | All non-polymer ligands (small molecules, inhibitors) in a PDB structure with formula and SMILES |
+
+**PubChem vs ChEMBL:** PubChem is a broad public repository useful for names, synonyms, and raw bioassay deposits from many sources. ChEMBL is the curated gold-standard for medicinal chemistry — bioactivity data is extracted from peer-reviewed literature, standardised to a common target/assay schema, and annotated with clinical development stage (`max_phase`). For SAR and lead optimisation, ChEMBL data is generally more reliable.
+
+**Example questions:**
+
+- *"What are the IUPAC names and known trade names for our top 5 hits?"*
+- *"Find commercially available analogs of our best SPR hit with ≥ 85% Tanimoto similarity."*
+- *"Has anything structurally similar to our best hit been tested in ChEMBL? Is it a known drug?"*
+- *"Get the curated bioassay activity profile for CHEMBL12345 — what targets has it been tested against and how potent?"*
+- *"Run ML-based ADMET predictions on the top 10 hits and flag hERG or solubility concerns."*
+- *"Search BindingDB for compounds similar to compound X — has anything like it been measured against a macrodomain?"*
+- *"Find crystal structures of the VEEV macrodomain in the PDB."*
+- *"What small molecules are bound in PDB structure 7LYJ? Show their SMILES."*
+
 ### Architecture
 
 ```
@@ -171,10 +185,16 @@ Agent (LLM)
 ├── lookup_pubchem                  → main process → PubChem REST API
 ├── search_pubchem_by_substructure  → main process → PubChem REST API
 ├── search_pubchem_by_similarity    → main process → PubChem REST API
-└── get_pubchem_bioassays           → main process → PubChem REST API
+├── get_pubchem_bioassays           → main process → PubChem REST API
+├── search_chembl                   → main process → ChEMBL REST API
+├── get_chembl_activities           → main process → ChEMBL REST API
+├── predict_admet_ml                → main process → ADMETlab 3.0 API
+├── search_bindingdb                → main process → BindingDB REST API
+├── search_pdb                      → main process → RCSB PDB Search API
+└── get_pdb_ligands                 → main process → RCSB PDB Data API
 ```
 
-Typical workflow: the agent uses `run_python` to extract SMILES or names from the dataset, then calls a cheminformatics or PubChem tool with those values.
+Typical workflow: the agent uses `run_python` to extract SMILES or names from the dataset, then calls a cheminformatics or external database tool with those values.
 
 ## Docker
 
