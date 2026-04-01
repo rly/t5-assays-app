@@ -232,6 +232,25 @@ def build_system_prompt(datasets: dict[str, pd.DataFrame]) -> str:
         "  df['MW'] = df['mol'].apply(lambda m: Descriptors.MolWt(m) if m else None)\n\n"
         "Use RDKit when asked about molecular properties, structural similarity, substructure searches,\n"
         "drug-likeness filtering, or SAR (structure-activity relationship) analysis.\n\n"
+        "PUBCHEM TOOLS:\n"
+        "You have four tools for querying the PubChem database. All make live network requests.\n\n"
+        "1. `lookup_pubchem(identifiers, identifier_type='smiles')`\n"
+        "   Look up compounds by SMILES, name, or CID. Returns: cid, iupac_name, synonyms,\n"
+        "   molecular_formula, molecular_weight, xlogp, tpsa, h_bond_donor/acceptor_count,\n"
+        "   rotatable_bond_count, isomeric_smiles.\n"
+        "   Use for: compound identity, trade names, drug approval status, cross-referencing.\n\n"
+        "2. `search_pubchem_by_substructure(smarts, max_results=20)`\n"
+        "   Find all PubChem compounds containing a given SMARTS substructure.\n"
+        "   Use for: scaffold enumeration, finding all known compounds with a specific motif.\n\n"
+        "3. `search_pubchem_by_similarity(smiles, threshold=90, max_results=20)`\n"
+        "   Find PubChem compounds with Tanimoto similarity >= threshold (0-100) to a query SMILES.\n"
+        "   Use for: analog discovery, scaffold hopping, finding commercially available analogs.\n\n"
+        "4. `get_pubchem_bioassays(cid)`\n"
+        "   Retrieve bioassay activity summary for a PubChem CID — which assays it was tested in\n"
+        "   and whether it was active or inactive.\n"
+        "   Use for: prior art, PAINS/frequent hitter detection, target selectivity profiling.\n\n"
+        "Workflow: use run_python to extract SMILES/names from the dataset, then call PubChem tools.\n"
+        "Do NOT use pubchempy or make network requests inside run_python.\n\n"
         f"Data context:\n{data_context}\n\n"
         "Answer questions accurately. Highlight key findings and actionable insights."
     )
@@ -251,11 +270,159 @@ def create_agent(api_key: str, model_id: str) -> Agent[ChatDeps, str]:
     )
 
     @agent.tool
+    async def lookup_pubchem(ctx: RunContext[ChatDeps], identifiers: list[str], identifier_type: str = "smiles") -> str:
+        """Look up compound data from PubChem for a list of SMILES strings, names, or CIDs.
+
+        Args:
+            identifiers: List of SMILES strings, compound names, or CID numbers (as strings).
+            identifier_type: One of 'smiles', 'name', or 'cid'. Defaults to 'smiles'.
+
+        Returns:
+            JSON string with a list of compound records containing cid, iupac_name, synonyms,
+            molecular_formula, molecular_weight, xlogp, tpsa, h_bond_donor_count,
+            h_bond_acceptor_count, rotatable_bond_count, and isomeric_smiles.
+        """
+        import pubchempy as pcp
+
+        results = []
+        for ident in identifiers[:20]:  # cap at 20 to avoid excessive API calls
+            try:
+                compounds = pcp.get_compounds(ident, identifier_type)
+                if compounds:
+                    c = compounds[0]
+                    results.append({
+                        "query": ident,
+                        "cid": c.cid,
+                        "iupac_name": c.iupac_name,
+                        "synonyms": (c.synonyms or [])[:5],
+                        "molecular_formula": c.molecular_formula,
+                        "molecular_weight": c.molecular_weight,
+                        "xlogp": c.xlogp,
+                        "tpsa": c.tpsa,
+                        "h_bond_donor_count": c.h_bond_donor_count,
+                        "h_bond_acceptor_count": c.h_bond_acceptor_count,
+                        "rotatable_bond_count": c.rotatable_bond_count,
+                        "isomeric_smiles": c.isomeric_smiles,
+                    })
+                else:
+                    results.append({"query": ident, "error": "Not found in PubChem"})
+            except Exception as e:
+                results.append({"query": ident, "error": str(e)})
+
+        return json.dumps(results, indent=2)
+
+    @agent.tool
+    async def search_pubchem_by_substructure(ctx: RunContext[ChatDeps], smarts: str, max_results: int = 20) -> str:
+        """Search PubChem for compounds containing a given substructure (SMARTS pattern).
+
+        Args:
+            smarts: SMARTS pattern describing the substructure to search for (e.g. 'c1ccccc1' for benzene).
+            max_results: Maximum number of results to return (default 20, max 100).
+
+        Returns:
+            JSON string with a list of matching compound records from PubChem.
+        """
+        import pubchempy as pcp
+
+        max_results = min(max_results, 100)
+        try:
+            compounds = pcp.get_compounds(smarts, "smarts", listkey_count=max_results)
+            results = []
+            for c in compounds[:max_results]:
+                results.append({
+                    "cid": c.cid,
+                    "iupac_name": c.iupac_name,
+                    "synonyms": (c.synonyms or [])[:3],
+                    "molecular_formula": c.molecular_formula,
+                    "molecular_weight": c.molecular_weight,
+                    "isomeric_smiles": c.isomeric_smiles,
+                    "xlogp": c.xlogp,
+                    "tpsa": c.tpsa,
+                })
+            return json.dumps({"query_smarts": smarts, "count": len(results), "compounds": results}, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    @agent.tool
+    async def search_pubchem_by_similarity(ctx: RunContext[ChatDeps], smiles: str, threshold: int = 90, max_results: int = 20) -> str:
+        """Search PubChem for compounds structurally similar to a given SMILES string.
+
+        Args:
+            smiles: SMILES string of the query compound.
+            threshold: Tanimoto similarity threshold (0-100, default 90 = 90% similar).
+            max_results: Maximum number of results to return (default 20, max 100).
+
+        Returns:
+            JSON string with a list of similar compound records from PubChem.
+        """
+        import pubchempy as pcp
+
+        max_results = min(max_results, 100)
+        threshold = max(0, min(threshold, 100))
+        try:
+            compounds = pcp.get_compounds(
+                smiles, "smiles",
+                searchtype="similarity",
+                Threshold=threshold,
+                listkey_count=max_results,
+            )
+            results = []
+            for c in compounds[:max_results]:
+                results.append({
+                    "cid": c.cid,
+                    "iupac_name": c.iupac_name,
+                    "synonyms": (c.synonyms or [])[:3],
+                    "molecular_formula": c.molecular_formula,
+                    "molecular_weight": c.molecular_weight,
+                    "isomeric_smiles": c.isomeric_smiles,
+                    "xlogp": c.xlogp,
+                    "tpsa": c.tpsa,
+                })
+            return json.dumps({"query_smiles": smiles, "threshold": threshold, "count": len(results), "compounds": results}, indent=2)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    @agent.tool
+    async def get_pubchem_bioassays(ctx: RunContext[ChatDeps], cid: int) -> str:
+        """Retrieve bioassay activity summary for a PubChem compound CID.
+
+        Returns which assays the compound was tested in and whether it was active or inactive.
+        Useful for determining if a compound has been tested against viral or other biological targets.
+
+        Args:
+            cid: PubChem Compound ID (integer).
+
+        Returns:
+            JSON string with bioassay activity summary records.
+        """
+        import httpx
+
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/assaysummary/JSON"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url)
+            if resp.status_code == 404:
+                return json.dumps({"cid": cid, "error": "No bioassay data found for this CID"})
+            resp.raise_for_status()
+            data = resp.json()
+            table = data.get("Table", {})
+            columns = [col["Name"] for col in table.get("Columns", {}).get("Column", [])]
+            rows = table.get("Row", [])
+            records = []
+            for row in rows[:50]:  # cap at 50 assays
+                cells = row.get("Cell", [])
+                records.append(dict(zip(columns, cells)))
+            return json.dumps({"cid": cid, "assay_count": len(rows), "assays": records}, indent=2)
+        except Exception as e:
+            return json.dumps({"cid": cid, "error": str(e)})
+
+    @agent.tool
     def run_python(ctx: RunContext[ChatDeps], code: str) -> str:
         """Execute Python code against the provided datasets.
         Available variables: each dataset as a named variable (e.g., VEEV_PEITHO_SPR), plus a 'datasets' dict.
         If only one dataset is provided, 'df' is also available.
-        Use print() to output results. pandas, numpy, rdkit, math, statistics, re, datetime are available."""
+        Use print() to output results. pandas, numpy, rdkit, math, statistics, re, datetime are available.
+        Do NOT use pubchempy or make network requests in run_python — use the lookup_pubchem tool instead."""
         result = execute_code(code, ctx.deps.datasets)
         if result["success"]:
             output = result.get("output", "").strip()

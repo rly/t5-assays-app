@@ -28,7 +28,6 @@ try:
     from rdkit import DataStructs
 except ImportError:
     pass
-
 # Load datasets dict from temp file
 datasets = pickle.loads(open(sys.argv[1], 'rb').read())
 
@@ -44,7 +43,8 @@ if len(datasets) == 1:
 
 # Install import restriction hook
 _BLOCKED = {
-    'subprocess', 'socket', 'http', 'urllib', 'requests', 'httpx',
+    'subprocess', 'socket', 'http', 'urllib',
+    'requests', 'httpx',
     'ftplib', 'smtplib', 'xmlrpc', 'socketserver',
     'pathlib', 'glob', 'tempfile',
     'multiprocessing', 'threading', 'concurrent',
