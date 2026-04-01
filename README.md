@@ -7,8 +7,9 @@ Web application for exploring alphaviral macrodomain assay data with AI-powered 
 - **Data browsing** -- Interactive AG Grid table with sorting, filtering, and column pinning. Loads data from Google Sheets via service account.
 - **Data merging** -- Merges PEITHO (SPR + AI docking) and PARG (FP + AI docking) datasets automatically.
 - **Correlation plots** -- Plotly scatter plots with OLS trendlines for key assay comparisons.
-- **AI chat** -- Ask questions about the data using OpenRouter models. The AI can execute Python code (pandas/numpy) against the dataset to compute answers.
-- **Tool calling** -- Pydantic AI handles the agentic loop: the model calls `run_python`, sees results, and can iterate.
+- **AI chat** -- Ask questions about the data using OpenRouter models. The AI can execute Python code (pandas/numpy/RDKit) against the dataset to compute answers.
+- **Tool calling** -- Pydantic AI handles the agentic loop: the model calls `run_python` and PubChem tools, sees results, and can iterate.
+- **Cheminformatics** -- RDKit runs inside the sandboxed Python environment for local molecular analysis. PubChemPy runs in the main process as dedicated agent tools for live PubChem database queries.
 - **Cost tracking** -- Per-message and per-conversation token counts and estimated costs.
 - **Authentication** -- Simple email/password login with encrypted session cookies.
 
@@ -86,6 +87,55 @@ app/
   templates/           # Jinja2 HTML templates
   static/              # CSS + JS
 ```
+
+## Cheminformatics Integration
+
+### RDKit (local, no internet required)
+
+RDKit is pre-loaded in the sandboxed `run_python` environment. The AI can use it directly in Python code alongside pandas for molecular analysis of the `Structure` (SMILES) column.
+
+**Example questions:**
+
+- *"Which compounds pass Lipinski's Rule of Five?"*
+- *"Compute molecular weight, LogP, and TPSA for all compounds and show the distribution."*
+- *"Find all compounds containing a benzimidazole scaffold."*
+- *"Cluster the top 20 hits by Tanimoto fingerprint similarity and show a heatmap."*
+- *"Which compounds have the highest SPR binding affinity AND are drug-like (MW < 500, LogP < 5)?"*
+- *"Plot LogP vs TPSA for all compounds, coloured by whether they pass the Rule of Five."*
+- *"What is the most common ring system among the active compounds?"*
+
+### PubChem Tools (live database queries)
+
+Four agent tools query the PubChem REST API from the main process. The sandbox blocks all network access, so only these trusted tools can reach the internet.
+
+| Tool | Description |
+|---|---|
+| `lookup_pubchem` | Fetch metadata (IUPAC name, synonyms, MW, LogP, TPSA, CID) for a list of SMILES, names, or CIDs |
+| `search_pubchem_by_substructure` | Find all PubChem compounds containing a SMARTS substructure |
+| `search_pubchem_by_similarity` | Find analogs by Tanimoto similarity threshold (0–100%) |
+| `get_pubchem_bioassays` | Retrieve bioassay activity history for a compound CID |
+
+**Example questions:**
+
+- *"What are the IUPAC names and known trade names for our top 5 hits?"*
+- *"Have any of our active compounds been previously reported in PubChem bioassays?"*
+- *"Find commercially available analogs of our best SPR hit with ≥ 85% Tanimoto similarity."*
+- *"Search PubChem for all known compounds containing the macrodomain-binding scaffold from compound X."*
+- *"Which of our hits have been tested in antiviral assays before? Pull their bioassay history."*
+- *"Cross-reference our top 10 compounds with PubChem — do any have known toxicity flags or PAINS alerts in the bioassay data?"*
+
+### Architecture
+
+```
+Agent (LLM)
+├── run_python tool          → sandboxed subprocess (RDKit, pandas, numpy — no network)
+├── lookup_pubchem           → main process → PubChem REST API
+├── search_pubchem_by_substructure  → main process → PubChem REST API
+├── search_pubchem_by_similarity    → main process → PubChem REST API
+└── get_pubchem_bioassays    → main process → PubChem REST API
+```
+
+Typical workflow: the agent uses `run_python` to extract SMILES or CIDs from the dataset, then calls a PubChem tool with those values.
 
 ## Docker
 
