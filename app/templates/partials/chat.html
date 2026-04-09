@@ -40,7 +40,7 @@
         What should I test next?
     </button>
     <span class="tooltip-wrapper">
-        <button class="suggestion-chip report-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
                 hx-vals='{"message": "Generate a comprehensive analysis report: 1) Dataset overview for each provided dataset. 2) Top 10 binding candidates ranked by the most relevant metric. 3) Cross-dataset comparison — where do assays agree or disagree? 4) Data quality issues (missing values, outliers). 5) Top 5 compounds to prioritize for further study with justification."}'
                 hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
             Generate Report
@@ -93,6 +93,14 @@
             ADMET predictions
         </button>
         <span class="tooltip-text">Rule-based ADMET triage: absorption, BBB, P-gp, CYP inhibition, PAINS, and Brenk alerts. No external API.</span>
+    </span>
+    <span class="tooltip-wrapper">
+        <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
+                hx-vals='{"message": "Select a dataset with KD values. Use run_python to: 1) Filter the bottom 25% of compounds by affinity (KD values). 2) Extract their identifiers (IDNUMBER) and SMILES (Structure). 3) Using RDKit, detect any common core scaffold, substituent pattern, or functional group shared among these poor binders. 4) Contrast these structural features with those found in the top 10% of compounds by affinity to highlight structural red flags that differentiate inactive compounds from lead candidates. 5) Summarize findings with actionable insights for compound design."}'
+                hx-on::before-request="onChatSend(event)" hx-on::after-request="onChatDone(event)">
+            Poor binder SAR
+        </button>
+        <span class="tooltip-text">Analyzes the worst 25% of binders for common structural features and contrasts with top hits.</span>
     </span>
     <span class="tooltip-wrapper">
         <button class="suggestion-chip" hx-post="/chat/send" hx-target="#chat-messages" hx-swap="beforeend"
