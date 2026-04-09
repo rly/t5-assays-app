@@ -11,7 +11,7 @@ from app.dependencies import get_current_user
 from app.models import User, DatasetSelection
 from app.services.merge_service import load_dataset
 from app.services.filter_service import apply_filters
-from app.column_descriptions import COLUMN_DESCRIPTIONS
+from app.services.sheets_service import get_column_descriptions
 
 router = APIRouter(prefix="/api")
 
@@ -51,6 +51,6 @@ async def get_data(
         rows.append(record)
 
     # Include column descriptions for header tooltips
-    col_descriptions = {col: COLUMN_DESCRIPTIONS.get(col, "") for col in columns}
+    col_descriptions = {col: get_column_descriptions().get(col, "") for col in columns}
 
     return JSONResponse({"columns": columns, "rows": rows, "column_descriptions": col_descriptions})

@@ -249,7 +249,8 @@ class ChatDeps:
 
 def _describe_dataset(name: str, df: pd.DataFrame) -> str:
     """Generate column summary for a single dataset, with human-readable descriptions."""
-    from app.column_descriptions import COLUMN_DESCRIPTIONS
+    from app.services.sheets_service import get_column_descriptions
+    COLUMN_DESCRIPTIONS = get_column_descriptions()
 
     col_descriptions = []
     for col in df.columns:

@@ -1,5 +1,6 @@
 import json
 import io
+
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -109,3 +110,27 @@ def read_sheet(spreadsheet_id: str) -> pd.DataFrame:
             df[col] = converted
 
     return df
+
+
+def get_column_descriptions() -> dict[str, str]:
+    """Load column descriptions from *_columns sheets in Google Drive.
+
+    Each _columns sheet has headers "Column Name" and "Description".
+    """
+    sheets = get_sheets_from_folder()
+    descs: dict[str, str] = {}
+    for name, info in sheets.items():
+        if not name.endswith("_columns"):
+            continue
+        try:
+            df = read_sheet(info["id"])
+            if "Column Name" in df.columns and "Description" in df.columns:
+                for _, row in df.iterrows():
+                    col_name = str(row["Column Name"]).strip()
+                    col_desc = str(row["Description"]).strip()
+                    if col_name and col_desc and col_name != "nan" and col_desc != "nan":
+                        descs[col_name] = col_desc
+        except Exception:
+            continue
+
+    return descs
